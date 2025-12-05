@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    
+    <!-- PWA Setup -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#09090b">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/337/337946.png">
+    
+    <!-- PWA & Social Meta Tags (Required for PWABuilder Score) -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://pdf-reader-8ev.pages.dev/">
+    <meta property="og:title" content="Anotador de PDF Drive">
+    <meta property="og:description" content="Um PWA serverless para visualizar PDFs do Google Drive, fazer anotações e sincronizar com Firestore.">
+    <meta property="og:image" content="https://cdn-icons-png.flaticon.com/512/337/337946.png">
+    
+    <title>Anotador de PDF Drive</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: 'var(--brand)',
+              bg: 'var(--bg-main)',
+              surface: 'var(--bg-surface)',
+              sidebar: 'var(--bg-sidebar)',
+              text: 'var(--text-main)',
+              'text-sec:': 'var(--text-sec)',
+              border: 'var(--border-color)',
+            },
+            fontFamily: {
+              sans: ['"Google Sans"', 'Inter', 'sans-serif'],
+            }
+          }
+        }
+      }
+    </script>
+    <!-- PDF.js Worker style fix for some environments -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.449/web/pdf_viewer.css">
+    <!-- Google Fonts: Inter (Google Sans alternative) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+<style>
+  /* --- THEME VARIABLES --- */
+  :root {
+    /* Padrão: Midnight (Meia-noite) */
+    --bg-main: #09090b;
+    --bg-surface: #09090b;
+    --bg-sidebar: #000000;
+    --text-main: #fafafa;
+    --text-sec: #a1a1aa;
+    --brand: #ffffff;
+    --border-color: #27272a;
+    --accent-glow: rgba(255, 255, 255, 0.1);
+  }
+
+  /* 1. Slate (Antigo Padrão) */
+  .slate {
+    --bg-main: #0f172a;
+    --bg-surface: #1e293b;
+    --bg-sidebar: #1e293b;
+    --text-main: #f1f5f9;
+    --text-sec: #94a3b8;
+    --brand: #6366f1;
+    --border-color: #334155;
+    --accent-glow: rgba(99, 102, 241, 0.2);
+  }
+
+  /* 2. Alto Contraste */
+  .high-contrast {
+    --bg-main: #000000;
+    --bg-surface: #000000;
+    --bg-sidebar: #000000;
+    --text-main: #ffffff;
+    --text-sec: #ffff00;
+    --brand: #ffff00; /* Botões amarelos */
+    --border-color: #ffffff;
+  }
+  .high-contrast .btn-primary {
+    background-color: #ffff00 !important;
+    color: #000000 !important;
+    font-weight: bold;
+  }
+
+  /* 3. MN (Dark Moderno) */
+  .mn {
+    --bg-main: #1a1a1a;
+    --bg-surface: #2c2c2c;
+    --bg-sidebar: #212121;
+    --text-main: #f0f0f0;
+    --text-sec: #a0a0a0;
+    --brand: #48bb78; /* Verde menta */
+    --border-color: #404040;
+  }
+
+  /* 5. Aurora Galática */
+  .galactic-aurora {
+    --bg-main: #0F1014;
+    --bg-surface: #181920;
+    --bg-sidebar: #131419;
+    --text-main: #ffffff;
+    --text-sec: #4CC9F0;
+    --brand: #4CC9F0; /* Ciano Cyber */
+    --border-color: #2E2F3E;
+  }
+  .galactic-aurora .btn-primary {
+    background: linear-gradient(90deg, #D90429, #0055FF) !important;
+    border: none;
+  }
+
+  /* 6. Ano do Dragão */
+  .dragon-year {
+    --bg-main: #f3e5ca; /* Bege Pergaminho */
+    --bg-surface: #FFF8E7;
+    --bg-sidebar: #5D0E0E; /* Vermelho Profundo */
+    --text-main: #3E2723; /* Marrom Café */
+    --text-sec: #5D4037;
+    --brand: #B71C1C;
+    --border-color: #D4AF37; /* Dourado */
+  }
+  /* Ajustes específicos para sidebar neste tema (texto claro na sidebar escura) */
+  .dragon-year .sidebar-text {
+    color: #FFD700 !important;
+  }
+  /* Custom Menu Button Style for Dragon Year Theme (Gold & Red 3D Button) */
+  .dragon-year .custom-menu-btn {
+    background-color: #FFC107 !important; /* Amber equivalent */
+    color: #991B1B !important; /* Red-800 text */
+    border: 2px solid #7F1D1D !important; /* Red-900 border */
+    border-radius: 12px !important;
+    box-shadow: 0 4px 0 #7F1D1D !important; /* 3D effect shadow */
+    opacity: 1 !important;
+    transition: all 0.1s ease-in-out;
+  }
+  .dragon-year .custom-menu-btn:active {
+    transform: translateY(4px) !important;
+    box-shadow: none !important;
+  }
+  
+  /* Apply Google Sans / Inter globally */
+  body {
+    font-family: 'Google Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  }
+
+  /* --- PDF.js Custom Text Layer Overrides --- */
+  /* We rely on pdf_viewer.css for positioning, but we need to ensure visibility */
+  .textLayer {
+    opacity: 1 !important; /* Ensure the layer itself (and selection box) is fully visible */
+    /* mix-blend-mode: multiply; -> REMOVED: Can cause selection issues with transparent text */
+    z-index: 10;
+  }
+
+  .textLayer > span {
+    color: transparent; /* Hide the text itself */
+    cursor: text;
+  }
+  
+  /* High contrast selection to make it obvious */
+  ::selection {
+    background: rgba(255, 255, 0, 0.4); /* Bright yellow background */
+    color: transparent;
+  }
+  
+  /* Fallback for webkit */
+  ::-moz-selection {
+    background: rgba(255, 255, 0, 0.4);
+    color: transparent;
+  }
+
+  /* --- PDF.js FONT MAPPINGS --- */
+  
+  /* TimesNewRoman (Mapped to System Times New Roman) */
+  @font-face {
+    font-family: 'TimesNewRoman';
+    src: local('Times New Roman'), local('Times');
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'TimesNewRoman-Bold';
+    src: local('Times New Roman Bold'), local('Times New Roman'), local('Times');
+    font-weight: bold;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'TimesNewRoman-Italic';
+    src: local('Times New Roman Italic'), local('Times New Roman'), local('Times');
+    font-weight: normal;
+    font-style: italic;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'TimesNewRoman-BoldItalic';
+    src: local('Times New Roman Bold Italic'), local('Times New Roman'), local('Times');
+    font-weight: bold;
+    font-style: italic;
+    font-display: swap;
+  }
+
+  /* TimesNewRomanPSMT variations mapped to System Times New Roman with EXACT Names */
+  @font-face {
+    font-family: 'TimesNewRomanPSMT';
+    src: local('Times New Roman PS MT'), local('Times New Roman'), local('Times');
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'TimesNewRomanPS-BoldMT';
+    src: local('Times New Roman PS Bold MT'), local('Times New Roman Bold'), local('Times New Roman'), local('Times');
+    font-weight: bold;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'TimesNewRomanPS-ItalicMT';
+    src: local('Times New Roman PS Italic MT'), local('Times New Roman Italic'), local('Times New Roman'), local('Times');
+    font-weight: normal;
+    font-style: italic;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'TimesNewRomanPS-BoldItalicMT';
+    src: local('Times New Roman PS Bold Italic MT'), local('Times New Roman Bold Italic'), local('Times New Roman'), local('Times');
+    font-weight: bold;
+    font-style: italic;
+    font-display: swap;
+  }
+
+  /* Arial (Mapped to Inter) - Kept as per original design for UI consistency where Arial is requested */
+  @font-face {
+    font-family: 'Arial';
+    src: local('Inter'), local('Inter Regular'),
+         url('https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZ9hjp-Ek-_EeA.woff2') format('woff2');
+    font-weight: normal;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Arial-Bold';
+    src: local('Inter Bold'), local('Inter-Bold'),
+         url('https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuGkyAZ9hjp-Ek-_EeA.woff2') format('woff2');
+    font-weight: bold;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Arial-Italic';
+    src: local('Inter'),
+         url('https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZ9hjp-Ek-_EeA.woff2') format('woff2');
+    font-weight: normal;
+    font-style: italic;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: 'Arial-BoldItalic';
+    src: local('Inter Bold'),
+         url('https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuGkyAZ9hjp-Ek-_EeA.woff2') format('woff2');
+    font-weight: bold;
+    font-style: italic;
+    font-display: swap;
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "firebase/": "https://aistudiocdn.com/firebase@^12.6.0/",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
+    "pdfjs-dist": "https://aistudiocdn.com/pdfjs-dist@^5.4.449",
+    "pdf-lib": "https://aistudiocdn.com/pdf-lib@^1.17.1",
+    "vite": "https://aistudiocdn.com/vite@^7.2.6",
+    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.1.1",
+    "idb": "https://aistudiocdn.com/idb@^8.0.3"
+  }
+}
+</script>
+</head>
+  <body class="bg-bg text-text overflow-hidden transition-colors duration-300">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+    
+    <!-- PWA Service Worker Registration -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').then(registration => {
+            console.log('SW registered: ', registration);
+          }).catch(registrationError => {
+            console.log('SW registration failed: ', registrationError);
+          });
+        });
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,106 @@
+import { DriveFile } from "../types";
+
+export async function listDriveContents(accessToken: string, folderId: string = 'root'): Promise<DriveFile[]> {
+  let query = "";
+  const baseConstraints = "trashed=false and (mimeType='application/pdf' or mimeType='application/vnd.google-apps.folder')";
+  
+  if (folderId === 'shared-with-me') {
+    query = `sharedWithMe=true and ${baseConstraints}`;
+  } else if (folderId === 'starred') {
+    query = `starred=true and ${baseConstraints}`;
+  } else {
+    // Standard folder navigation (including 'root' alias for My Drive)
+    query = `'${folderId}' in parents and ${baseConstraints}`;
+  }
+
+  const fields = "files(id, name, mimeType, thumbnailLink, parents, starred)";
+  
+  // Aumentado pageSize para 1000 para garantir que mostre todo o conteúdo da pasta
+  const response = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=${encodeURIComponent(fields)}&pageSize=1000&orderBy=folder,name`,
+    {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    }
+  );
+
+  if (!response.ok) {
+    if (response.status === 401) throw new Error("Unauthorized");
+    
+    try {
+      const errorData = await response.json();
+      const message = errorData.error?.message || "Erro desconhecido na API do Drive";
+      console.error("Drive API Error:", errorData);
+      throw new Error(message);
+    } catch (e) {
+      if (e instanceof Error && e.message !== "Erro desconhecido na API do Drive") {
+        throw e;
+      }
+      throw new Error(`Falha ao buscar arquivos (Status: ${response.status})`);
+    }
+  }
+
+  const data = await response.json();
+  return data.files || [];
+}
+
+export async function downloadDriveFile(accessToken: string, driveFileId: string): Promise<Blob> {
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  
+  if (!res.ok) {
+    if (res.status === 403) throw new Error("Permissão negada (403). Verifique se a API do Drive está ativada.");
+    try {
+        const err = await res.json();
+        throw new Error(err.error?.message || "Erro no download");
+    } catch {
+        throw new Error("Falha no download do Drive");
+    }
+  }
+  return res.blob();
+}
+
+export async function uploadFileToDrive(
+  accessToken: string, 
+  file: Blob, 
+  name: string, 
+  parents: string[] = []
+): Promise<any> {
+  const metadata = {
+    name: name,
+    mimeType: 'application/pdf',
+    parents: parents.length > 0 ? parents : undefined
+  };
+
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  form.append('file', file);
+
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`
+    },
+    body: form
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error?.message || "Falha ao fazer upload");
+  }
+
+  return res.json();
+}
+
+export async function deleteDriveFile(accessToken: string, fileId: string): Promise<void> {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || "Falha ao deletar arquivo original");
+  }
+}
