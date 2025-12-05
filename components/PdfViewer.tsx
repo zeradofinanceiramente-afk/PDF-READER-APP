@@ -317,7 +317,7 @@ const PdfPage: React.FC<PdfPageProps> = ({
   return (
     <div 
       ref={pageContainerRef}
-      className={`pdf-page relative shadow-lg bg-white mb-4 md:mb-8 mx-auto transition-cursor ${activeTool === 'text' ? 'cursor-text' : activeTool === 'ink' ? 'cursor-crosshair touch-none' : activeTool === 'eraser' ? 'cursor-[url(https://cdn-icons-png.flaticon.com/32/2661/2661282.png),_pointer]' : ''}`}
+      className={`pdf-page relative shadow-lg bg-white mb-4 md:mb-8 mx-auto transition-cursor select-none ${activeTool === 'text' ? 'cursor-text' : activeTool === 'ink' ? 'cursor-crosshair touch-none' : activeTool === 'eraser' ? 'cursor-[url(https://cdn-icons-png.flaticon.com/32/2661/2661282.png),_pointer]' : ''}`}
       data-page-number={pageNumber}
       style={{ 
         width: widthStyle, 

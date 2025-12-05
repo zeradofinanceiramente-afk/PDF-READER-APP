@@ -7,6 +7,7 @@ export interface DriveFile {
   thumbnailLink?: string;
   parents?: string[]; // Pasta onde o arquivo está
   blob?: Blob; // Optional: for local files or pre-loaded content
+  starred?: boolean;
 }
 
 export interface Annotation {
