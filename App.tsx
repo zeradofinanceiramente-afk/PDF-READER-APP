@@ -184,7 +184,10 @@ export default function App() {
     }
     
     // 3. Abre em nova aba/janela
-    window.open(`${window.location.pathname}?${params.toString()}`, '_blank');
+    // Usamos o ID do arquivo como nome da janela ('pdf_ID').
+    // Isso garante que cada arquivo tenha sua própria janela no multitarefa do OS,
+    // mas se você clicar no mesmo arquivo novamente, ele foca a janela existente em vez de duplicar.
+    window.open(`${window.location.pathname}?${params.toString()}`, `pdf_${file.id}`);
   };
 
   const handleLocalUpload = (e: React.ChangeEvent<HTMLInputElement>) => {

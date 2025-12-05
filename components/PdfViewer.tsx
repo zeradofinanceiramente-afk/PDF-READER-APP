@@ -501,6 +501,14 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
   const [inkStrokeWidth, setInkStrokeWidth] = useState(20); // 20px by default
   const [inkOpacity, setInkOpacity] = useState(0.5); // 50% opacity by default
 
+  // Update Page Title (Native Multi-Window Task Label)
+  useEffect(() => {
+    document.title = fileName;
+    return () => {
+      document.title = "Anotador de PDF Drive";
+    };
+  }, [fileName]);
+
   // Fichamento Text Generation
   const fichamentoText = useMemo(() => {
     // Filter annotations that have text
