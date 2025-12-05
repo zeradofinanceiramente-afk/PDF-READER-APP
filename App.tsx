@@ -185,9 +185,12 @@ export default function App() {
     
     // 3. Abre em nova aba/janela
     // Usamos o ID do arquivo como nome da janela ('pdf_ID').
-    // Isso garante que cada arquivo tenha sua própria janela no multitarefa do OS,
-    // mas se você clicar no mesmo arquivo novamente, ele foca a janela existente em vez de duplicar.
-    window.open(`${window.location.pathname}?${params.toString()}`, `pdf_${file.id}`);
+    // Adicionado 'popup=yes' e dimensões para forçar o comportamento de "nova tarefa/card" no PWA
+    const width = window.screen.width;
+    const height = window.screen.height;
+    const features = `popup=yes,width=${width},height=${height},toolbar=no,menubar=no,location=no,status=no`;
+
+    window.open(`${window.location.pathname}?${params.toString()}`, `pdf_${file.id}`, features);
   };
 
   const handleLocalUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
