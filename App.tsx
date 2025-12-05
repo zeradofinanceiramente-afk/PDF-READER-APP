@@ -7,8 +7,8 @@ import { DriveBrowser } from './components/DriveBrowser';
 import { PdfViewer } from './components/PdfViewer';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
-import { AppState, DriveFile } from './types';
-import { ShieldCheck, Upload, LogIn, RefreshCw, AlertCircle, XCircle, Copy, Menu } from 'lucide-react';
+import { DriveFile } from './types';
+import { ShieldCheck, LogIn, RefreshCw, AlertCircle, XCircle, Copy, Menu } from 'lucide-react';
 
 // Helpers para Local Storage com Expiração
 const TOKEN_KEY = 'drive_access_token';
@@ -44,27 +44,20 @@ const clearToken = () => {
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
-  
-  // Inicializa token do localStorage (persiste mesmo fechando a aba)
-  const [accessToken, setAccessToken] = useState<string | null>(() => {
-    return getStoredToken();
-  });
-  
+  const [accessToken, setAccessToken] = useState<string | null>(() => getStoredToken());
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [authError, setAuthError] = useState<{title: string, message: string, code?: string} | null>(null);
   
-  // Navigation State
-  const [currentView, setCurrentView] = useState<'dashboard' | 'browser' | 'viewer'>('dashboard');
+  // --- Navigation & Tab State ---
+  // activeTab controls what is currently visible: 'dashboard' | 'browser' | [fileId]
+  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [openFiles, setOpenFiles] = useState<DriveFile[]>([]);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   
-  // Flag para saber se estamos em uma janela separada (Popup Mode)
+  // Flag for Popup Mode (Legacy/Direct Link)
   const [isPopup, setIsPopup] = useState(false);
-  
-  // File State
-  const [selectedFile, setSelectedFile] = useState<DriveFile | null>(null);
-  const [localFile, setLocalFile] = useState<{blob: Blob, meta: DriveFile} | null>(null);
 
-  // Monitor URL Params (Para abrir em nova janela)
+  // Monitor URL Params
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const mode = params.get('mode');
@@ -78,7 +71,6 @@ export default function App() {
         setIsPopup(true);
         const parents = parentsStr ? JSON.parse(decodeURIComponent(parentsStr)) : undefined;
         
-        // Reconstrói o objeto do arquivo baseado na URL
         const fileFromUrl: DriveFile = {
           id: fileId,
           name: fileName,
@@ -86,24 +78,23 @@ export default function App() {
           parents
         };
         
-        setSelectedFile(fileFromUrl);
-        setCurrentView('viewer');
+        // In popup mode, we treat the file as the only "open" file
+        setOpenFiles([fileFromUrl]);
+        setActiveTab(fileId);
       }
     }
   }, []);
 
-  // Monitor Firebase Auth State
+  // Monitor Firebase Auth
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       if (!currentUser) {
         setAccessToken(null);
         clearToken();
-        // Se for popup e deslogar, talvez fechar ou mostrar erro?
-        // Por enquanto, mostra tela de login padrão.
         if (!isPopup) {
-            setSelectedFile(null);
-            setCurrentView('dashboard');
+            setOpenFiles([]);
+            setActiveTab('dashboard');
         }
       }
       setLoadingAuth(false);
@@ -111,7 +102,7 @@ export default function App() {
     return () => unsubscribe();
   }, [isPopup]);
 
-  // Monitor Online Status for Sync
+  // Monitor Online Status
   useEffect(() => {
     const handleOnline = () => syncPendingAnnotations();
     window.addEventListener('online', handleOnline);
@@ -124,29 +115,23 @@ export default function App() {
     try {
       const result = await signInWithGoogleDrive();
       setAccessToken(result.accessToken);
-      // Persist token
       saveToken(result.accessToken);
     } catch (e: any) {
       console.error("Login error full:", e);
-      
       let errorData = {
         title: "Falha no Login",
         message: "Ocorreu um erro inesperado. Tente novamente.",
         code: e.code
       };
-
       if (e.code === 'auth/unauthorized-domain') {
         errorData = {
           title: "Domínio Não Autorizado",
-          message: `O domínio atual (${window.location.hostname}) não está autorizado no Firebase Console. Adicione-o em Authentication > Settings > Authorized Domains.`,
+          message: `O domínio atual (${window.location.hostname}) não está autorizado no Firebase Console.`,
           code: e.code
         };
-      } else if (e.code === 'auth/popup-closed-by-user') {
-        return; // Ignore user closing popup
       } else if (e.message) {
          errorData.message = e.message;
       }
-
       setAuthError(errorData);
     }
   };
@@ -156,283 +141,225 @@ export default function App() {
     await logout();
     setAccessToken(null);
     clearToken();
-    setLocalFile(null);
-    setSelectedFile(null);
-    if (!isPopup) {
-      setCurrentView('dashboard');
-    }
+    setOpenFiles([]);
+    setActiveTab('dashboard');
     setIsMobileMenuOpen(false);
   };
 
-  // Called when Drive API returns 401 (Unauthorized)
   const handleAuthError = () => {
     setAccessToken(null);
     clearToken();
   };
 
+  // --- Tab Management Logic ---
+
   const handleOpenFile = (file: DriveFile) => {
-    // 1. Salva no histórico local imediatamente
     addRecentFile(file);
     
-    // 2. Constrói URL para nova janela
-    const params = new URLSearchParams();
-    params.set('mode', 'viewer');
-    params.set('fileId', file.id);
-    params.set('fileName', file.name);
-    if (file.parents) {
-      params.set('parents', encodeURIComponent(JSON.stringify(file.parents)));
+    // Check if file is already open
+    if (!openFiles.find(f => f.id === file.id)) {
+      setOpenFiles(prev => [...prev, file]);
     }
     
-    // 3. Abre em nova aba/janela
-    // Usamos o ID do arquivo como nome da janela ('pdf_ID').
-    // Adicionado 'popup=yes' e dimensões para forçar o comportamento de "nova tarefa/card" no PWA
-    const width = window.screen.width;
-    const height = window.screen.height;
-    const features = `popup=yes,width=${width},height=${height},toolbar=no,menubar=no,location=no,status=no`;
+    // Switch to this file's tab
+    setActiveTab(file.id);
+    setIsMobileMenuOpen(false);
+  };
 
-    window.open(`${window.location.pathname}?${params.toString()}`, `pdf_${file.id}`, features);
+  const handleCloseFile = (fileId: string) => {
+    const newFiles = openFiles.filter(f => f.id !== fileId);
+    setOpenFiles(newFiles);
+    
+    // If we closed the active tab, switch to another one
+    if (activeTab === fileId) {
+      if (newFiles.length > 0) {
+        // Switch to the last opened file
+        setActiveTab(newFiles[newFiles.length - 1].id);
+      } else {
+        // Fallback to dashboard if no files left
+        setActiveTab('dashboard');
+      }
+    }
   };
 
   const handleLocalUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
-      const meta = {
+      const newFile: DriveFile = {
         id: `local-${Date.now()}`,
         name: file.name,
-        mimeType: file.type
+        mimeType: file.type,
+        blob: file
       };
       
-      // Arquivos locais continuam na mesma aba devido à complexidade de passar Blobs entre janelas
-      setLocalFile({ blob: file, meta });
-      addRecentFile(meta);
-      setCurrentView('viewer');
-      setIsMobileMenuOpen(false);
+      handleOpenFile(newFile);
     }
   };
 
-  const handleBack = () => {
-    if (isPopup) {
-      window.close();
-    } else {
-      setSelectedFile(null);
-      setLocalFile(null);
-      setCurrentView('dashboard');
-    }
-  };
-
-  const handleChangeView = (view: 'dashboard' | 'browser') => {
-    setCurrentView(view);
+  const handleTabSwitch = (tabId: string) => {
+    setActiveTab(tabId);
     setIsMobileMenuOpen(false);
-  }
+  };
 
   if (loadingAuth) {
     return <div className="h-screen w-full flex items-center justify-center bg-bg text-text">Carregando...</div>;
   }
 
-  // Determine main content based on view
-  let mainContent;
-
-  if (currentView === 'viewer') {
-    if (localFile) {
-      mainContent = (
-        <PdfViewer 
-          accessToken={null}
-          fileId={localFile.meta.id}
-          fileName={localFile.meta.name}
-          uid="guest"
-          onBack={handleBack}
-          fileBlob={localFile.blob}
-          isPopup={isPopup}
-        />
-      );
-    } else if (selectedFile && accessToken && user) {
-      mainContent = (
-        <PdfViewer 
-          accessToken={accessToken}
-          fileId={selectedFile.id}
-          fileName={selectedFile.name}
-          fileParents={selectedFile.parents}
-          uid={user.uid}
-          onBack={handleBack}
-          isPopup={isPopup}
-        />
-      );
-    } else if (isPopup && !user) {
-        // Caso a janela popup abra e não tenha usuário logado
-        mainContent = (
-            <div className="flex h-screen flex-col items-center justify-center p-6 text-center bg-bg text-text">
-                 <ShieldCheck size={48} className="text-text-sec mb-4" />
-                 <h2 className="text-2xl font-bold mb-2">Autenticação Necessária</h2>
-                 <p className="text-text-sec mb-6">Para visualizar este arquivo, faça login novamente.</p>
-                 <button 
-                      onClick={handleLogin}
-                      className="flex items-center gap-2 py-3 px-6 bg-brand text-bg rounded-full font-medium"
-                    >
-                      <LogIn size={18} />
-                      Entrar com Google
-                </button>
-            </div>
-        );
-    } else if (isPopup && user && !accessToken) {
-         // Caso token tenha expirado no popup
-          mainContent = (
-            <div className="flex h-screen flex-col items-center justify-center p-6 text-center bg-bg text-text">
-                 <AlertCircle size={48} className="text-yellow-500 mb-4" />
-                 <h2 className="text-2xl font-bold mb-2">Sessão Expirada</h2>
-                 <p className="text-text-sec mb-6">A conexão segura com o Google Drive precisa ser renovada.</p>
-                 <button 
-                      onClick={handleLogin}
-                      className="flex items-center gap-2 py-3 px-6 bg-brand text-bg rounded-full font-medium"
-                    >
-                      <RefreshCw size={18} />
-                      Reconectar
-                </button>
-            </div>
-        );
+  // If Popup Mode (legacy), simplified render
+  if (isPopup) {
+    const activeFile = openFiles.find(f => f.id === activeTab);
+    
+    if (!user) {
+       return (
+          <div className="flex h-screen flex-col items-center justify-center p-6 text-center bg-bg text-text">
+               <ShieldCheck size={48} className="text-text-sec mb-4" />
+               <h2 className="text-2xl font-bold mb-2">Autenticação Necessária</h2>
+               <button onClick={handleLogin} className="flex items-center gap-2 py-3 px-6 bg-brand text-bg rounded-full font-medium">
+                 <LogIn size={18} /> Entrar com Google
+              </button>
+          </div>
+       );
     }
-  } else {
-    // Shell Layout (Sidebar + Main Content)
-    mainContent = (
+    if (!activeFile) return <div className="p-10 text-text">Arquivo não encontrado.</div>;
+
+    return (
+      <PdfViewer 
+        accessToken={accessToken}
+        fileId={activeFile.id}
+        fileName={activeFile.name}
+        fileParents={activeFile.parents}
+        uid={user.uid}
+        onBack={() => window.close()}
+        fileBlob={activeFile.blob}
+        isPopup={true}
+      />
+    );
+  }
+
+  // Main App Layout (Sidebar + Tabbed Content)
+  return (
+    <>
       <div className="flex h-screen w-full bg-bg overflow-hidden transition-colors duration-300">
         <Sidebar 
-          currentView={currentView as 'dashboard'|'browser'} 
-          onChangeView={handleChangeView}
+          activeTab={activeTab}
+          onSwitchTab={handleTabSwitch}
+          openFiles={openFiles}
+          onCloseFile={handleCloseFile}
           user={user}
           onLogout={handleLogout}
           isOpen={isMobileMenuOpen}
           onClose={() => setIsMobileMenuOpen(false)}
         />
         
-        <main className="flex-1 relative overflow-hidden flex flex-col">
+        {/* Main Content Area - Stacked Views for Keep-Alive */}
+        <main className="flex-1 relative overflow-hidden flex flex-col bg-bg">
           
-          {/* Guest User trying to access Drive Browser */}
-          {!user && currentView === 'browser' && (
-            <div className="flex-1 flex flex-col p-6 text-text animate-in fade-in zoom-in duration-300">
-               {/* Mobile Header for Guest Browser */}
-               <div className="md:hidden mb-6">
-                 <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 -ml-2 text-text-sec hover:text-text">
-                   <Menu size={24} />
-                 </button>
-               </div>
-
-               <div className="flex-1 flex flex-col items-center justify-center text-center">
-                  <div className="w-16 h-16 bg-surface border border-border rounded-2xl flex items-center justify-center mb-6">
-                      <ShieldCheck size={32} className="text-text-sec" />
-                  </div>
-                  <h2 className="text-2xl font-bold mb-2">Login Necessário</h2>
-                  <p className="text-text-sec mb-6 max-w-sm">Para acessar seus arquivos do Google Drive, você precisa fazer login com segurança.</p>
-                  <button 
-                      onClick={handleLogin}
-                      className="flex items-center gap-2 py-3 px-6 bg-brand text-bg rounded-full hover:brightness-110 transition-colors font-medium shadow-lg shadow-brand/20 btn-primary"
-                    >
-                      <LogIn size={18} />
-                      Entrar com Google
-                    </button>
-               </div>
-            </div>
-          )}
-
-          {/* Logged in User but Token Expired/Missing for Drive Browser */}
-          {user && currentView === 'browser' && !accessToken && (
-             <div className="flex-1 flex flex-col p-6 text-text animate-in fade-in zoom-in duration-300">
-                 {/* Mobile Header for Auth Error */}
-                 <div className="md:hidden mb-6">
+          {/* Guest Wall for Browser Tab */}
+          {!user && activeTab === 'browser' && (
+             <div className="absolute inset-0 z-20 bg-bg p-6 flex flex-col animate-in fade-in">
+                <div className="md:hidden mb-6">
                    <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 -ml-2 text-text-sec hover:text-text">
                      <Menu size={24} />
                    </button>
                  </div>
-
                  <div className="flex-1 flex flex-col items-center justify-center text-center">
-                    <div className="w-16 h-16 bg-yellow-500/10 border border-yellow-500/20 rounded-2xl flex items-center justify-center mb-6 text-yellow-500">
-                      <AlertCircle size={32} />
-                    </div>
-                    <h2 className="text-2xl font-bold mb-2">Sessão do Drive Expirou</h2>
-                    <p className="text-text-sec mb-6 max-w-sm">A conexão de segurança com o Google Drive (válida por 1h) expirou ou não foi encontrada.</p>
-                    <button 
-                      onClick={handleLogin}
-                      className="flex items-center gap-2 py-3 px-6 bg-brand text-bg rounded-full hover:brightness-110 transition-colors font-medium shadow-lg shadow-brand/20 btn-primary"
-                    >
-                      <RefreshCw size={18} />
-                      Reconectar Drive
+                    <ShieldCheck size={48} className="text-text-sec mb-4" />
+                    <h2 className="text-2xl font-bold mb-2 text-text">Login Necessário</h2>
+                    <p className="text-text-sec mb-6">Acesse seus arquivos do Drive com segurança.</p>
+                    <button onClick={handleLogin} className="btn-primary flex items-center gap-2 py-3 px-6 bg-brand text-bg rounded-full font-medium">
+                      <LogIn size={18} /> Entrar com Google
                     </button>
                  </div>
              </div>
           )}
 
-          {/* Valid Views */}
-          {currentView === 'dashboard' && (
+           {/* Token Expired Wall */}
+           {user && activeTab === 'browser' && !accessToken && (
+             <div className="absolute inset-0 z-20 bg-bg p-6 flex flex-col animate-in fade-in">
+                 <div className="md:hidden mb-6">
+                   <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 -ml-2 text-text-sec hover:text-text">
+                     <Menu size={24} />
+                   </button>
+                 </div>
+                 <div className="flex-1 flex flex-col items-center justify-center text-center">
+                    <AlertCircle size={48} className="text-yellow-500 mb-4" />
+                    <h2 className="text-2xl font-bold mb-2 text-text">Conexão Expirada</h2>
+                    <button onClick={handleLogin} className="btn-primary flex items-center gap-2 py-3 px-6 bg-brand text-bg rounded-full font-medium">
+                      <RefreshCw size={18} /> Reconectar Drive
+                    </button>
+                 </div>
+             </div>
+           )}
+
+          {/* DASHBOARD VIEW */}
+          <div className="w-full h-full" style={{ display: activeTab === 'dashboard' ? 'block' : 'none' }}>
             <Dashboard 
               userName={user?.displayName}
               onOpenFile={handleOpenFile}
               onUploadLocal={handleLocalUpload}
-              onChangeView={(v) => handleChangeView(v)}
+              onChangeView={(v) => handleTabSwitch(v)}
               onToggleMenu={() => setIsMobileMenuOpen(true)}
             />
-          )}
+          </div>
 
-          {currentView === 'browser' && user && accessToken && (
-            <DriveBrowser 
-              accessToken={accessToken}
-              onSelectFile={handleOpenFile}
-              onLogout={handleLogout}
-              onAuthError={handleAuthError}
-              onToggleMenu={() => setIsMobileMenuOpen(true)}
-            />
-          )}
+          {/* BROWSER VIEW */}
+          <div className="w-full h-full" style={{ display: activeTab === 'browser' ? 'block' : 'none' }}>
+             {user && accessToken && (
+                <DriveBrowser 
+                  accessToken={accessToken}
+                  onSelectFile={handleOpenFile}
+                  onLogout={handleLogout}
+                  onAuthError={handleAuthError}
+                  onToggleMenu={() => setIsMobileMenuOpen(true)}
+                />
+             )}
+          </div>
+
+          {/* OPEN FILES VIEWS (Keep-Alive) */}
+          {openFiles.map(file => (
+            <div 
+              key={file.id} 
+              className="w-full h-full absolute inset-0 bg-bg"
+              style={{ display: activeTab === file.id ? 'block' : 'none' }}
+            >
+              <PdfViewer 
+                 accessToken={accessToken}
+                 fileId={file.id}
+                 fileName={file.name}
+                 fileParents={file.parents}
+                 uid={user ? user.uid : 'guest'}
+                 onBack={() => handleCloseFile(file.id)} // "Back" closes the tab in this context
+                 fileBlob={file.blob}
+                 isPopup={false}
+              />
+            </div>
+          ))}
+
         </main>
       </div>
-    );
-  }
-
-  return (
-    <>
-      {/* Wrapper to ensure content swaps don't affect siblings */}
-      <div className="contents">
-        {mainContent}
-      </div>
       
-      {/* Error Toast / Banner */}
+      {/* Error Toast */}
       {authError && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-md p-4 animate-in slide-in-from-top-4">
           <div className="bg-surface border border-red-500/50 rounded-xl shadow-2xl p-4 flex gap-4 text-text relative">
-            <div className="bg-red-500/10 p-2 rounded-full h-fit text-red-500">
-              <AlertCircle size={24} />
-            </div>
+            <div className="bg-red-500/10 p-2 rounded-full h-fit text-red-500"><AlertCircle size={24} /></div>
             <div className="flex-1 min-w-0">
               <h3 className="font-bold text-red-500 mb-1">{authError.title}</h3>
               <p className="text-sm text-text-sec mb-2 break-words">{authError.message}</p>
-              
               {authError.code === 'auth/unauthorized-domain' && (
                 <div className="bg-bg p-2 rounded border border-border flex items-center justify-between gap-2 mt-2">
                   <code className="text-xs text-brand truncate flex-1">{window.location.hostname}</code>
-                  <button 
-                    onClick={() => navigator.clipboard.writeText(window.location.hostname)}
-                    className="p-1 hover:bg-white/10 rounded text-text-sec hover:text-text transition"
-                    title="Copiar domínio"
-                  >
-                    <Copy size={14} />
-                  </button>
+                  <button onClick={() => navigator.clipboard.writeText(window.location.hostname)} className="p-1 hover:bg-white/10 rounded text-text-sec hover:text-text"><Copy size={14} /></button>
                 </div>
               )}
             </div>
-            <button 
-              onClick={() => setAuthError(null)}
-              className="absolute top-2 right-2 text-text-sec hover:text-text p-1"
-            >
-              <XCircle size={18} />
-            </button>
+            <button onClick={() => setAuthError(null)} className="absolute top-2 right-2 text-text-sec hover:text-text p-1"><XCircle size={18} /></button>
           </div>
         </div>
       )}
 
-      {/* Persistent Components */}
-      <input 
-        type="file" 
-        id="local-upload-hidden"
-        accept="application/pdf" 
-        onChange={handleLocalUpload} 
-        className="hidden" 
-      />
+      {/* Persistent Hidden Input */}
+      <input type="file" id="local-upload-hidden" accept="application/pdf" onChange={handleLocalUpload} className="hidden" />
     </>
   );
 }

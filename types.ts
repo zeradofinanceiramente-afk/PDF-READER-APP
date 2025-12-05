@@ -6,6 +6,7 @@ export interface DriveFile {
   mimeType: string;
   thumbnailLink?: string;
   parents?: string[]; // Pasta onde o arquivo está
+  blob?: Blob; // Optional: for local files or pre-loaded content
 }
 
 export interface Annotation {
