@@ -52,7 +52,9 @@ export default function App() {
   // activeTab controls what is currently visible: 'dashboard' | 'browser' | [fileId]
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [openFiles, setOpenFiles] = useState<DriveFile[]>([]);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  
+  // Sidebar State (Unified for Mobile & Desktop)
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth > 768);
   
   // Flag for Popup Mode (Legacy/Direct Link)
   const [isPopup, setIsPopup] = useState(false);
@@ -146,7 +148,7 @@ export default function App() {
     clearToken();
     setOpenFiles([]);
     setActiveTab('dashboard');
-    setIsMobileMenuOpen(false);
+    setIsSidebarOpen(false);
   };
 
   const handleAuthError = () => {
@@ -166,7 +168,8 @@ export default function App() {
     
     // Switch to this file's tab
     setActiveTab(file.id);
-    setIsMobileMenuOpen(false);
+    // On mobile, close sidebar. On desktop, keep it as is.
+    if (window.innerWidth < 768) setIsSidebarOpen(false);
   };
 
   const handleCloseFile = (fileId: string) => {
@@ -201,7 +204,7 @@ export default function App() {
 
   const handleTabSwitch = (tabId: string) => {
     setActiveTab(tabId);
-    setIsMobileMenuOpen(false);
+    if (window.innerWidth < 768) setIsSidebarOpen(false);
   };
 
   if (loadingAuth) {
@@ -250,9 +253,10 @@ export default function App() {
           onCloseFile={handleCloseFile}
           user={user}
           onLogout={handleLogout}
-          isOpen={isMobileMenuOpen}
-          onClose={() => setIsMobileMenuOpen(false)}
-          docked={!isViewerActive} // Only dock sidebar on Desktop when NOT reading a PDF
+          isOpen={isSidebarOpen}
+          onClose={() => setIsSidebarOpen(false)}
+          // Sidebar docked only if Viewer is NOT active AND sidebar is set to open (Desktop)
+          docked={!isViewerActive && isSidebarOpen} 
         />
         
         {/* Main Content Area - Stacked Views for Keep-Alive */}
@@ -261,17 +265,17 @@ export default function App() {
           {/* Guest Wall for Browser Tab */}
           {!user && activeTab === 'browser' && (
              <div className="absolute inset-0 z-20 bg-bg p-6 flex flex-col animate-in fade-in">
-                <div className="md:hidden mb-6">
-                   <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 -ml-2 text-text-sec hover:text-text">
-                     <Menu size={24} />
+                <div className="mb-6">
+                   <button onClick={() => setIsSidebarOpen(true)} className="p-3 -ml-3 text-text-sec hover:text-text">
+                     <Menu size={32} />
                    </button>
                  </div>
                  <div className="flex-1 flex flex-col items-center justify-center text-center">
-                    <ShieldCheck size={48} className="text-text-sec mb-4" />
-                    <h2 className="text-2xl font-bold mb-2 text-text">Login Necessário</h2>
-                    <p className="text-text-sec mb-6">Acesse seus arquivos do Drive com segurança.</p>
-                    <button onClick={handleLogin} className="btn-primary flex items-center gap-2 py-3 px-6 bg-brand text-bg rounded-full font-medium">
-                      <LogIn size={18} /> Entrar com Google
+                    <ShieldCheck size={64} className="text-text-sec mb-6" />
+                    <h2 className="text-4xl font-bold mb-4 text-text">Login Necessário</h2>
+                    <p className="text-xl text-text-sec mb-8">Acesse seus arquivos do Drive com segurança.</p>
+                    <button onClick={handleLogin} className="btn-primary flex items-center gap-3 py-4 px-8 bg-brand text-bg rounded-full text-lg font-bold">
+                      <LogIn size={24} /> Entrar com Google
                     </button>
                  </div>
              </div>
@@ -280,16 +284,16 @@ export default function App() {
            {/* Token Expired Wall */}
            {user && activeTab === 'browser' && !accessToken && (
              <div className="absolute inset-0 z-20 bg-bg p-6 flex flex-col animate-in fade-in">
-                 <div className="md:hidden mb-6">
-                   <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 -ml-2 text-text-sec hover:text-text">
-                     <Menu size={24} />
+                 <div className="mb-6">
+                   <button onClick={() => setIsSidebarOpen(true)} className="p-3 -ml-3 text-text-sec hover:text-text">
+                     <Menu size={32} />
                    </button>
                  </div>
                  <div className="flex-1 flex flex-col items-center justify-center text-center">
-                    <AlertCircle size={48} className="text-yellow-500 mb-4" />
-                    <h2 className="text-2xl font-bold mb-2 text-text">Conexão Expirada</h2>
-                    <button onClick={handleLogin} className="btn-primary flex items-center gap-2 py-3 px-6 bg-brand text-bg rounded-full font-medium">
-                      <RefreshCw size={18} /> Reconectar Drive
+                    <AlertCircle size={64} className="text-yellow-500 mb-6" />
+                    <h2 className="text-3xl font-bold mb-4 text-text">Conexão Expirada</h2>
+                    <button onClick={handleLogin} className="btn-primary flex items-center gap-3 py-4 px-8 bg-brand text-bg rounded-full text-lg font-bold">
+                      <RefreshCw size={24} /> Reconectar Drive
                     </button>
                  </div>
              </div>
@@ -302,7 +306,7 @@ export default function App() {
               onOpenFile={handleOpenFile}
               onUploadLocal={handleLocalUpload}
               onChangeView={(v) => handleTabSwitch(v)}
-              onToggleMenu={() => setIsMobileMenuOpen(true)}
+              onToggleMenu={() => setIsSidebarOpen(prev => !prev)}
             />
           </div>
 
@@ -314,7 +318,7 @@ export default function App() {
                   onSelectFile={handleOpenFile}
                   onLogout={handleLogout}
                   onAuthError={handleAuthError}
-                  onToggleMenu={() => setIsMobileMenuOpen(true)}
+                  onToggleMenu={() => setIsSidebarOpen(prev => !prev)}
                 />
              )}
           </div>
@@ -335,7 +339,7 @@ export default function App() {
                  onBack={() => handleCloseFile(file.id)} // "Back" closes the tab in this context
                  fileBlob={file.blob}
                  isPopup={false}
-                 onToggleNavigation={() => setIsMobileMenuOpen(true)}
+                 onToggleNavigation={() => setIsSidebarOpen(prev => !prev)}
               />
             </div>
           ))}
