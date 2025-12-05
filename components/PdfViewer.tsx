@@ -43,7 +43,8 @@ const renderCustomTextLayer = (textContent: any, container: HTMLElement, viewpor
   container.innerHTML = '';
   
   textContent.items.forEach((item: any) => {
-    if (!item.str || item.str.trim().length === 0) return;
+    // FIX: Do not trim whitespace. Rendering spaces is crucial for smooth text selection (prevents snapping).
+    if (!item.str || item.str.length === 0) return;
 
     const tx = item.transform;
     const fontHeight = Math.sqrt(tx[3] * tx[3] + tx[2] * tx[2]);

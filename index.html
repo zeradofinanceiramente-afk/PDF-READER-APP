@@ -155,11 +155,15 @@
     opacity: 1 !important; /* Ensure the layer itself (and selection box) is fully visible */
     /* mix-blend-mode: multiply; -> REMOVED: Can cause selection issues with transparent text */
     z-index: 10;
+    user-select: text; /* Ensures browser treats this as selectable text */
+    -webkit-user-select: text;
   }
 
   .textLayer > span {
     color: transparent; /* Hide the text itself */
     cursor: text;
+    user-select: text;
+    -webkit-user-select: text;
   }
   
   /* High contrast selection to make it obvious */
