@@ -27,7 +27,7 @@ interface SelectionState {
   // Position relative to the scrolling container
   popupX: number;
   popupY: number;
-  // Rects relative to the page element (for saving)
+  // Rects normalized to PDF coordinates (scale=1)
   relativeRects: { x: number; y: number; width: number; height: number }[];
 }
 
@@ -48,16 +48,36 @@ const renderCustomTextLayer = (textContent: any, container: HTMLElement, viewpor
 
     const tx = item.transform;
     const fontHeight = Math.sqrt(tx[3] * tx[3] + tx[2] * tx[2]);
-    const fontSize = fontHeight * viewport.scale;
-
+    const fontWidth = Math.sqrt(tx[0] * tx[0] + tx[1] * tx[1]);
+    
+    // Calculate precise position using viewport conversion
     const [x, y] = viewport.convertToViewportPoint(tx[4], tx[5]);
+
+    // Calculate horizontal scale correction (stretch/squash factor)
+    // tx[0] is roughly width scaling, tx[3] is height scaling (font size).
+    // If they differ, the font is stretched in PDF. We must replicate this in CSS.
+    // We use a safe default of 1 if calculation is weird (e.g. 0 height).
+    const scaleX = fontHeight > 0 ? (fontWidth / fontHeight) : 1;
+
+    const fontSize = fontHeight * viewport.scale;
 
     const span = document.createElement('span');
     span.textContent = item.str;
+    
+    // Position text at top-left. 
+    // Note: y from convertToViewportPoint is the baseline. 
+    // We adjust top by fontSize to position the span roughly correctly, 
+    // but the most important part for alignment is 'left' and 'width' (via scaleX).
     span.style.left = `${x}px`;
     span.style.top = `${y - fontSize}px`; 
     span.style.fontSize = `${fontSize}px`;
     
+    // Apply horizontal scaling to match PDF font width exactly
+    if (Math.abs(scaleX - 1) > 0.01) {
+      span.style.transform = `scaleX(${scaleX})`;
+      span.style.transformOrigin = '0% 0%';
+    }
+
     // Check for explicit font in PDF styles to respect TimesNewRoman or other specific fonts
     if (textContent.styles && item.fontName && textContent.styles[item.fontName]) {
       span.style.fontFamily = textContent.styles[item.fontName].fontFamily;
@@ -70,13 +90,13 @@ const renderCustomTextLayer = (textContent: any, container: HTMLElement, viewpor
     span.style.color = 'transparent';
     span.style.whiteSpace = 'pre';
     span.style.cursor = 'text';
-    span.style.transformOrigin = '0% 0%';
     span.style.lineHeight = '1';
     span.style.pointerEvents = 'all';
 
+    // Handle rotation if present in the matrix
     const angle = Math.atan2(tx[1], tx[0]);
     if (angle !== 0) {
-      span.style.transform = `rotate(${angle}rad)`;
+      span.style.transform = `rotate(${angle}rad) scaleX(${scaleX})`;
     }
 
     container.appendChild(span);
@@ -95,7 +115,7 @@ interface PdfPageProps {
   inkStrokeWidth: number;
   inkOpacity: number;
   onPageClick: (page: number, x: number, y: number) => void;
-  onDeleteAnnotation: (annotation: Annotation) => void; // Fixed: Now expects Annotation object
+  onDeleteAnnotation: (annotation: Annotation) => void;
   onAddInk: (ann: Annotation) => void;
 }
 
@@ -259,8 +279,9 @@ const PdfPage: React.FC<PdfPageProps> = ({
     if ((e.target as HTMLElement).closest('.annotation-item')) return;
 
     const rect = pageContainerRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    // Normalize coordinates to PDF scale=1
+    const x = (e.clientX - rect.left) / scale;
+    const y = (e.clientY - rect.top) / scale;
     
     onPageClick(pageNumber, x, y);
   };
@@ -272,8 +293,9 @@ const PdfPage: React.FC<PdfPageProps> = ({
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
 
     const rect = pageContainerRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    // Normalize coordinates to PDF scale=1
+    const x = (e.clientX - rect.left) / scale;
+    const y = (e.clientY - rect.top) / scale;
 
     setIsDrawing(true);
     setCurrentPoints([[x, y]]);
@@ -284,8 +306,9 @@ const PdfPage: React.FC<PdfPageProps> = ({
     e.preventDefault();
 
     const rect = pageContainerRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    // Normalize coordinates to PDF scale=1
+    const x = (e.clientX - rect.left) / scale;
+    const y = (e.clientY - rect.top) / scale;
 
     setCurrentPoints(prev => [...prev, [x, y]]);
   };
@@ -301,7 +324,7 @@ const PdfPage: React.FC<PdfPageProps> = ({
         page: pageNumber,
         bbox: [0, 0, 0, 0], 
         type: 'ink',
-        points: currentPoints,
+        points: currentPoints, // Already normalized
         color: inkColor,
         strokeWidth: inkStrokeWidth,
         opacity: inkOpacity
@@ -355,48 +378,56 @@ const PdfPage: React.FC<PdfPageProps> = ({
       {/* Annotations Layer */}
       {isVisible && (
         <div className="absolute inset-0 pointer-events-none">
-          {/* SVG Layer for Ink */}
+          {/* SVG Layer for Ink - Scaled via Group transform to match current zoom */}
           <svg className="absolute inset-0 w-full h-full" style={{ zIndex: 15 }}>
-            {annotations.filter(a => a.type === 'ink').map((ann, i) => (
-              <path
-                key={ann.id || `ink-${i}`}
-                d={pointsToSvgPath(ann.points || [])}
-                stroke={ann.color || 'red'}
-                strokeWidth={ann.strokeWidth || 3}
-                strokeOpacity={ann.opacity ?? 1}
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className={activeTool === 'eraser' ? 'hover:opacity-50 cursor-pointer' : ''}
-                style={{ 
-                  pointerEvents: activeTool === 'eraser' ? 'visibleStroke' : 'none',
-                  cursor: activeTool === 'eraser' ? 'pointer' : 'none'
-                }}
-                onClick={(e) => {
-                  if (activeTool === 'eraser' && ann.id) {
-                    e.stopPropagation();
-                    onDeleteAnnotation(ann); // Fixed: Pass annotation object
-                  }
-                }}
-              />
-            ))}
-            {/* Current Drawing Stroke */}
-            {isDrawing && (
-              <path 
-                d={pointsToSvgPath(currentPoints)}
-                stroke={inkColor}
-                strokeWidth={inkStrokeWidth}
-                strokeOpacity={inkOpacity}
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            )}
+            <g transform={`scale(${scale})`}>
+              {annotations.filter(a => a.type === 'ink').map((ann, i) => (
+                <path
+                  key={ann.id || `ink-${i}`}
+                  d={pointsToSvgPath(ann.points || [])}
+                  stroke={ann.color || 'red'}
+                  strokeWidth={ann.strokeWidth || 3}
+                  strokeOpacity={ann.opacity ?? 1}
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className={activeTool === 'eraser' ? 'hover:opacity-50 cursor-pointer' : ''}
+                  style={{ 
+                    pointerEvents: activeTool === 'eraser' ? 'visibleStroke' : 'none',
+                    cursor: activeTool === 'eraser' ? 'pointer' : 'none'
+                  }}
+                  onClick={(e) => {
+                    if (activeTool === 'eraser' && ann.id) {
+                      e.stopPropagation();
+                      onDeleteAnnotation(ann); 
+                    }
+                  }}
+                />
+              ))}
+              {/* Current Drawing Stroke */}
+              {isDrawing && (
+                <path 
+                  d={pointsToSvgPath(currentPoints)}
+                  stroke={inkColor}
+                  strokeWidth={inkStrokeWidth}
+                  strokeOpacity={inkOpacity}
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              )}
+            </g>
           </svg>
 
           {annotations.map((ann, i) => {
             const isHighlight = ann.type === 'highlight';
             
+            // For DOM elements (Highlights/Notes), we manually scale coordinates
+            const x = ann.bbox[0] * scale;
+            const y = ann.bbox[1] * scale;
+            const w = ann.bbox[2] * scale;
+            const h = ann.bbox[3] * scale;
+
             if (isHighlight) {
               return (
                 <div 
@@ -404,10 +435,10 @@ const PdfPage: React.FC<PdfPageProps> = ({
                   id={`ann-${ann.id}`}
                   className="annotation-item absolute mix-blend-multiply group pointer-events-auto"
                   style={{
-                    left: ann.bbox[0],
-                    top: ann.bbox[1],
-                    width: ann.bbox[2],
-                    height: ann.bbox[3],
+                    left: x,
+                    top: y,
+                    width: w,
+                    height: h,
                     backgroundColor: ann.color || '#facc15',
                     opacity: ann.opacity ?? 0.4,
                     pointerEvents: activeTool === 'cursor' ? 'none' : 'auto',
@@ -416,7 +447,7 @@ const PdfPage: React.FC<PdfPageProps> = ({
                   onClick={(e) => {
                     if (activeTool === 'eraser' && ann.id) {
                       e.stopPropagation();
-                      onDeleteAnnotation(ann); // Fixed: Pass annotation object
+                      onDeleteAnnotation(ann);
                     }
                   }}
                 />
@@ -428,8 +459,8 @@ const PdfPage: React.FC<PdfPageProps> = ({
                   id={`ann-${ann.id}`}
                   className="annotation-item absolute z-20 group pointer-events-auto"
                   style={{
-                    left: ann.bbox[0],
-                    top: ann.bbox[1],
+                    left: x,
+                    top: y,
                     maxWidth: '200px'
                   }}
                 >
@@ -443,7 +474,7 @@ const PdfPage: React.FC<PdfPageProps> = ({
                       <button 
                         onClick={(e) => {
                           e.stopPropagation();
-                          onDeleteAnnotation(ann); // Fixed: Pass annotation object
+                          onDeleteAnnotation(ann);
                         }}
                         className="absolute -top-2 -right-2 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-sm pointer-events-auto cursor-pointer"
                       >
@@ -526,8 +557,6 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
     if (textAnnotations.length === 0) return "";
 
     // DEDUPLICATION:
-    // When highlighting multiline text, we get multiple Annotation objects (one per line/rect).
-    // All of them contain the full text. We need to filter duplicates based on content and page.
     const seenTexts = new Set<string>();
     const uniqueAnnotations: Annotation[] = [];
 
@@ -546,7 +575,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
       .join('\n\n');
   }, [annotations]);
 
-  // Sidebar List Generation (Annotations Tab) - Same Deduplication Logic
+  // Sidebar List Generation (Annotations Tab)
   const sidebarAnnotations = useMemo(() => {
     const sorted = [...annotations].sort((a, b) => {
         if (a.page !== b.page) return a.page - b.page;
@@ -589,8 +618,6 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
     window.URL.revokeObjectURL(url);
   };
 
-  // Helper to delete an annotation
-  // If it's a text highlight, we delete ALL fragments on that page with the same text to keep visual consistency
   const handleDeleteAnnotation = (target: Annotation) => {
     if (target.type === 'ink' || !target.text) {
          // Delete specific item (Ink or valid ID)
@@ -719,17 +746,17 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
         const container = containerRef.current;
         const containerRect = container.getBoundingClientRect();
         
-        // Calculate coords relative to the container content area (including scroll)
-        // This ensures the popup scrolls WITH the text
+        // Calculate coords relative to the container content area (for popup)
         const popupX = boundingRect.left - containerRect.left + container.scrollLeft + (boundingRect.width / 2);
         const popupY = boundingRect.bottom - containerRect.top + container.scrollTop + 10;
 
         const pageRect = pageElement.getBoundingClientRect();
+        // NORMALIZE RECTS: Convert screen pixels to PDF Points (scale = 1)
         const relativeRects = rects.map(r => ({
-          x: r.left - pageRect.left,
-          y: r.top - pageRect.top,
-          width: r.width,
-          height: r.height
+          x: (r.left - pageRect.left) / scale,
+          y: (r.top - pageRect.top) / scale,
+          width: r.width / scale,
+          height: r.height / scale
         }));
 
         setSelection({
@@ -751,7 +778,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
       document.removeEventListener('touchend', handleSelectionEnd);
       document.removeEventListener('keyup', handleSelectionEnd);
     };
-  }, [activeTool]);
+  }, [activeTool, scale]); // Added scale as dependency to ensure normalization uses current value
 
 
   const createHighlight = async () => {
@@ -766,7 +793,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
           rect.y, 
           rect.width, 
           rect.height
-        ],
+        ], // Already normalized
         type: 'highlight',
         text: selection.text,
         color: highlightColor,
@@ -790,7 +817,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
     const newAnn: Annotation = {
       id: `temp-note-${Date.now()}-${Math.random()}`,
       page,
-      bbox: [x, y, 0, 0],
+      bbox: [x, y, 0, 0], // x, y passed here are already normalized
       type: 'note',
       text: text,
       color: '#fef9c3',
@@ -802,7 +829,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
   };
 
   const addInkAnnotation = async (ann: Annotation) => {
-    // ann already has temp id from PdfPage
+    // ann already has temp id from PdfPage and normalized points
     setAnnotations(prev => [...prev, ann]);
     saveAnnotationsList([ann]);
   };
@@ -811,8 +838,6 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
     setIsSaving(true);
     try {
       for (const ann of anns) {
-         // We might want to remove the temp ID before saving to Firestore if Firestore generates it,
-         // but storageService handles ID mapping.
          await saveAnnotation(uid, fileId, ann);
       }
     } catch (err) {
@@ -855,10 +880,13 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
         const { height } = page.getSize();
         
         if (ann.type === 'highlight') {
-          const rectX = ann.bbox[0] / scale;
-          const rectY = ann.bbox[1] / scale;
-          const rectW = ann.bbox[2] / scale;
-          const rectH = ann.bbox[3] / scale;
+          // BBox is normalized PDF units (scale=1). No need to divide by current view scale.
+          const rectX = ann.bbox[0];
+          const rectY = ann.bbox[1];
+          const rectW = ann.bbox[2];
+          const rectH = ann.bbox[3];
+          
+          // PDF coordinates are bottom-left origin. Flip Y.
           const pdfY = height - rectY - rectH;
 
           page.drawRectangle({
@@ -870,8 +898,8 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
             opacity: ann.opacity ?? 0.4,
           });
         } else if (ann.type === 'note' && ann.text) {
-          const rectX = ann.bbox[0] / scale;
-          const rectY = ann.bbox[1] / scale;
+          const rectX = ann.bbox[0];
+          const rectY = ann.bbox[1];
           const noteColor = hexToRgb(ann.color || '#fef9c3');
           page.drawRectangle({
             x: rectX,
@@ -881,17 +909,17 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
             color: noteColor,
           });
         } else if (ann.type === 'ink' && ann.points && ann.points.length > 0) {
-           // Basic line drawing approximation
            const color = hexToRgb(ann.color || '#ff0000');
-           const width = (ann.strokeWidth || 3) / scale; // Use strokeWidth stored in annotation
+           const width = ann.strokeWidth || 3; 
            
            for (let i = 0; i < ann.points.length - 1; i++) {
              const p1 = ann.points[i];
              const p2 = ann.points[i+1];
+             // Points are normalized. No scale division needed.
              page.drawLine({
-               start: { x: p1[0] / scale, y: height - (p1[1] / scale) },
-               end: { x: p2[0] / scale, y: height - (p2[1] / scale) },
-               thickness: width,
+               start: { x: p1[0], y: height - p1[1] },
+               end: { x: p2[0], y: height - p2[1] },
+               thickness: width, // Thickness might need tuning as it's in PDF units now
                color: color,
                opacity: ann.opacity ?? 0.5
              });
