@@ -93,7 +93,7 @@ interface PdfPageProps {
   inkStrokeWidth: number;
   inkOpacity: number;
   onPageClick: (page: number, x: number, y: number) => void;
-  onDeleteAnnotation: (id: string) => void;
+  onDeleteAnnotation: (annotation: Annotation) => void; // Fixed: Now expects Annotation object
   onAddInk: (ann: Annotation) => void;
 }
 
@@ -373,7 +373,7 @@ const PdfPage: React.FC<PdfPageProps> = ({
                 onClick={(e) => {
                   if (activeTool === 'eraser' && ann.id) {
                     e.stopPropagation();
-                    onDeleteAnnotation(ann.id);
+                    onDeleteAnnotation(ann); // Fixed: Pass annotation object
                   }
                 }}
               />
@@ -414,7 +414,7 @@ const PdfPage: React.FC<PdfPageProps> = ({
                   onClick={(e) => {
                     if (activeTool === 'eraser' && ann.id) {
                       e.stopPropagation();
-                      onDeleteAnnotation(ann.id);
+                      onDeleteAnnotation(ann); // Fixed: Pass annotation object
                     }
                   }}
                 />
@@ -441,7 +441,7 @@ const PdfPage: React.FC<PdfPageProps> = ({
                       <button 
                         onClick={(e) => {
                           e.stopPropagation();
-                          onDeleteAnnotation(ann.id!);
+                          onDeleteAnnotation(ann); // Fixed: Pass annotation object
                         }}
                         className="absolute -top-2 -right-2 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-sm pointer-events-auto cursor-pointer"
                       >
