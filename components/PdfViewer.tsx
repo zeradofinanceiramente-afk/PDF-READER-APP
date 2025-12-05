@@ -706,10 +706,13 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
         if (rects.length === 0) return;
 
         const boundingRect = range.getBoundingClientRect();
-        const containerRect = containerRef.current.getBoundingClientRect();
+        const container = containerRef.current;
+        const containerRect = container.getBoundingClientRect();
         
-        const popupX = boundingRect.left - containerRect.left + (boundingRect.width / 2) + containerRef.current.scrollLeft;
-        const popupY = boundingRect.bottom - containerRect.top + containerRef.current.scrollTop + 10;
+        // Calculate coords relative to the container content area (including scroll)
+        // This ensures the popup scrolls WITH the text
+        const popupX = boundingRect.left - containerRect.left + container.scrollLeft + (boundingRect.width / 2);
+        const popupY = boundingRect.bottom - containerRect.top + container.scrollTop + 10;
 
         const pageRect = pageElement.getBoundingClientRect();
         const relativeRects = rects.map(r => ({
@@ -983,6 +986,16 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
         <div className="flex items-center gap-2">
             {isSaving && <Loader2 size={16} className="animate-spin text-brand" />}
             
+            {/* Save Button Moved to Header */}
+            <button 
+                onClick={handleSaveToDrive}
+                className="flex items-center gap-2 px-3 py-1.5 bg-brand text-bg rounded-full text-sm font-medium hover:brightness-110 transition-all shadow-lg shadow-brand/20"
+                title="Salvar alterações no Drive"
+            >
+                <Save size={16} />
+                <span className="hidden sm:inline">Salvar</span>
+            </button>
+
             <button 
                 onClick={() => setShowSidebar(true)} 
                 className="p-2 hover:bg-white/10 rounded-full transition text-text"
@@ -1178,116 +1191,75 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
                             </div>
                         )}
                     </div>
-
-                    {/* Footer Actions */}
-                    <div className="p-4 border-t border-border bg-surface/50">
-                         {/* Tools Selector */}
-                         <div className="grid grid-cols-4 gap-2 mb-4">
-                            <button 
-                                onClick={() => setActiveTool('cursor')}
-                                className={`p-2 rounded-lg flex flex-col items-center gap-1 transition-colors ${activeTool === 'cursor' ? 'bg-brand text-bg' : 'bg-bg text-text-sec hover:text-text'}`}
-                                title="Selecionar Texto"
-                            >
-                                <MousePointer2 size={18} />
-                                <span className="text-[10px] font-bold">Cursor</span>
-                            </button>
-                             <button 
-                                onClick={() => setActiveTool('text')}
-                                className={`p-2 rounded-lg flex flex-col items-center gap-1 transition-colors ${activeTool === 'text' ? 'bg-brand text-bg' : 'bg-bg text-text-sec hover:text-text'}`}
-                                title="Nota de Texto (Clique na página)"
-                            >
-                                <Type size={18} />
-                                <span className="text-[10px] font-bold">Nota</span>
-                            </button>
-                             <button 
-                                onClick={() => setActiveTool('ink')}
-                                className={`p-2 rounded-lg flex flex-col items-center gap-1 transition-colors ${activeTool === 'ink' ? 'bg-brand text-bg' : 'bg-bg text-text-sec hover:text-text'}`}
-                                title="Desenhar"
-                            >
-                                <Pen size={18} />
-                                <span className="text-[10px] font-bold">Caneta</span>
-                            </button>
-                            <button 
-                                onClick={() => setActiveTool('eraser')}
-                                className={`p-2 rounded-lg flex flex-col items-center gap-1 transition-colors ${activeTool === 'eraser' ? 'bg-brand text-bg' : 'bg-bg text-text-sec hover:text-text'}`}
-                                title="Apagar Anotações"
-                            >
-                                <Eraser size={18} />
-                                <span className="text-[10px] font-bold">Borracha</span>
-                            </button>
-                         </div>
-                        
-                        {/* Action Buttons */}
-                        <div className="flex gap-2">
-                             <button 
-                                onClick={() => {
-                                  if(scale > 0.5) setScale(s => s - 0.2);
-                                }}
-                                className="p-2 rounded-lg bg-bg border border-border text-text hover:bg-white/5"
-                            >
-                                <ZoomOut size={18} />
-                            </button>
-                             <span className="flex-1 flex items-center justify-center text-xs font-mono bg-bg border border-border rounded-lg text-text-sec">
-                                {Math.round(scale * 100)}%
-                            </span>
-                            <button 
-                                onClick={() => {
-                                  if(scale < 4) setScale(s => s + 0.2);
-                                }}
-                                className="p-2 rounded-lg bg-bg border border-border text-text hover:bg-white/5"
-                            >
-                                <ZoomIn size={18} />
-                            </button>
-                            <button 
-                                onClick={handleFitWidth}
-                                className="p-2 rounded-lg bg-bg border border-border text-text hover:bg-white/5"
-                                title="Ajustar à Largura"
-                            >
-                                <MoveHorizontal size={18} />
-                            </button>
-                        </div>
-                        
-                        <button 
-                            onClick={handleSaveToDrive}
-                            className="w-full mt-3 py-3 rounded-xl bg-brand text-bg font-bold flex items-center justify-center gap-2 hover:brightness-110 transition-all shadow-lg shadow-brand/20"
-                        >
-                            <Save size={18} />
-                            <span>Salvar no Drive</span>
-                        </button>
-                    </div>
                 </div>
             </div>
         )}
 
-        {/* Floating Selection Menu */}
-        {selection && (
-          <div 
-            className="absolute z-50 flex flex-col gap-1 animate-in fade-in zoom-in duration-200"
-            style={{ 
-              left: Math.min(Math.max(10, selection.popupX - 75), window.innerWidth - 160), 
-              top: selection.popupY 
-            }}
-          >
-            <div className="bg-surface shadow-2xl rounded-xl p-1.5 flex items-center gap-1 border border-border">
-                <button 
-                  onClick={createHighlight}
-                  className="flex items-center gap-2 px-3 py-2 hover:bg-white/10 rounded-lg text-sm font-medium text-text transition-colors"
-                >
-                  <Highlighter size={16} className="text-yellow-400" />
-                  Destacar
-                </button>
-                <div className="w-px h-6 bg-border mx-1"></div>
-                <button 
-                  onClick={() => setSelection(null)}
-                  className="p-2 hover:bg-red-500/10 text-text-sec hover:text-red-500 rounded-lg transition-colors"
-                >
-                  <X size={16} />
-                </button>
-            </div>
-            {/* Little arrow pointing up */}
-            <div className="w-3 h-3 bg-surface border-t border-l border-border transform rotate-45 absolute -top-1.5 left-1/2 -translate-x-1/2"></div>
-          </div>
-        )}
+        {/* FLOATING ACTION BAR (THE ISLAND) */}
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-[100] flex flex-col items-center gap-2 pointer-events-none">
+             {/* The Island */}
+             <div className="flex items-center gap-3 p-2 rounded-full bg-black border border-white/20 shadow-2xl pointer-events-auto scale-100 transition-all hover:scale-105 text-white">
+                
+                {/* Tools Group */}
+                <div className="flex items-center gap-1 pr-2 border-r border-white/20">
+                    <button 
+                        onClick={() => setActiveTool('cursor')}
+                        className={`p-2 rounded-full transition-colors ${activeTool === 'cursor' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}
+                        title="Selecionar Texto"
+                    >
+                        <MousePointer2 size={20} />
+                    </button>
+                    <button 
+                        onClick={() => setActiveTool('text')}
+                        className={`p-2 rounded-full transition-colors ${activeTool === 'text' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}
+                        title="Nota de Texto"
+                    >
+                        <Type size={20} />
+                    </button>
+                    <button 
+                        onClick={() => setActiveTool('ink')}
+                        className={`p-2 rounded-full transition-colors ${activeTool === 'ink' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}
+                        title="Desenhar"
+                    >
+                        <Pen size={20} />
+                    </button>
+                    <button 
+                        onClick={() => setActiveTool('eraser')}
+                        className={`p-2 rounded-full transition-colors ${activeTool === 'eraser' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}
+                        title="Borracha"
+                    >
+                        <Eraser size={20} />
+                    </button>
+                </div>
+
+                {/* Zoom Group */}
+                <div className="flex items-center gap-1">
+                    <button 
+                        onClick={() => scale > 0.5 && setScale(s => s - 0.2)}
+                        className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-white/10"
+                    >
+                        <ZoomOut size={18} />
+                    </button>
+                    <span className="text-xs font-mono w-10 text-center text-white font-medium">
+                        {Math.round(scale * 100)}%
+                    </span>
+                    <button 
+                        onClick={() => scale < 4 && setScale(s => s + 0.2)}
+                        className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-white/10"
+                    >
+                        <ZoomIn size={18} />
+                    </button>
+                    <button
+                        onClick={handleFitWidth}
+                        className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-white/10"
+                        title="Ajustar à Largura"
+                    >
+                        <MoveHorizontal size={18} />
+                    </button>
+                </div>
+
+             </div>
+        </div>
 
         {/* PDF Pages Container */}
         <div 
@@ -1303,6 +1275,37 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
               }
             }}
         >
+            {/* Floating Selection Menu - MOVED INSIDE SCROLL CONTAINER */}
+            {selection && (
+              <div 
+                className="absolute z-50 flex flex-col gap-1 animate-in fade-in zoom-in duration-200"
+                style={{ 
+                  left: selection.popupX,
+                  top: selection.popupY,
+                  transform: 'translateX(-50%)'
+                }}
+              >
+                <div className="bg-surface shadow-2xl rounded-xl p-1.5 flex items-center gap-1 border border-border">
+                    <button 
+                      onClick={createHighlight}
+                      className="flex items-center gap-2 px-3 py-2 hover:bg-white/10 rounded-lg text-sm font-medium text-text transition-colors"
+                    >
+                      <Highlighter size={16} className="text-yellow-400" />
+                      Destacar
+                    </button>
+                    <div className="w-px h-6 bg-border mx-1"></div>
+                    <button 
+                      onClick={() => setSelection(null)}
+                      className="p-2 hover:bg-red-500/10 text-text-sec hover:text-red-500 rounded-lg transition-colors"
+                    >
+                      <X size={16} />
+                    </button>
+                </div>
+                {/* Little arrow pointing up */}
+                <div className="w-3 h-3 bg-surface border-t border-l border-border transform rotate-45 absolute -top-1.5 left-1/2 -translate-x-1/2"></div>
+              </div>
+            )}
+
           <div className="py-8 md:py-10 px-2 md:px-0">
             {Array.from({ length: numPages }, (_, i) => (
               <PdfPage 
