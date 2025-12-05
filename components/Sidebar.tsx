@@ -13,6 +13,7 @@ interface SidebarProps {
   onLogout: () => void;
   isOpen: boolean;
   onClose: () => void;
+  docked?: boolean;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ 
@@ -23,24 +24,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
   user, 
   onLogout, 
   isOpen, 
-  onClose 
+  onClose,
+  docked = true
 }) => {
   const [isThemesOpen, setIsThemesOpen] = useState(false);
 
+  // Dynamic classes based on docked state
+  // If docked (true): behaves as relative sidebar on desktop
+  // If not docked (false): behaves as drawer (fixed/absolute) on desktop
+  const dockedClasses = docked 
+    ? "md:relative md:translate-x-0 md:w-64 md:shadow-none" 
+    : "";
+
+  const backdropClasses = docked
+    ? "md:hidden"
+    : "";
+
   return (
     <>
-      {/* Mobile Backdrop */}
+      {/* Mobile/Overlay Backdrop */}
       {isOpen && (
         <div 
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden animate-in fade-in duration-200"
+          className={`fixed inset-0 bg-black/60 backdrop-blur-sm z-40 animate-in fade-in duration-200 ${backdropClasses}`}
           onClick={onClose}
         />
       )}
 
       {/* Sidebar Container */}
       <div className={`
-        fixed inset-y-0 left-0 z-50 w-72 bg-sidebar border-r border-border transition-transform duration-300 shadow-2xl md:shadow-none flex flex-col
-        md:relative md:translate-x-0 md:w-64
+        fixed inset-y-0 left-0 z-50 w-72 bg-sidebar border-r border-border transition-transform duration-300 shadow-2xl flex flex-col
+        ${dockedClasses}
         ${isOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
         {/* App Logo Area */}
@@ -51,7 +64,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
             <span className="font-bold text-xl text-text tracking-tight sidebar-text">Annotator</span>
           </div>
-          <button onClick={onClose} className="md:hidden p-1 text-text-sec hover:text-text">
+          <button onClick={onClose} className={`p-1 text-text-sec hover:text-text ${docked ? 'md:hidden' : ''}`}>
             <X size={24} />
           </button>
         </div>

@@ -57,6 +57,9 @@ export default function App() {
   // Flag for Popup Mode (Legacy/Direct Link)
   const [isPopup, setIsPopup] = useState(false);
 
+  // Determine if we are in "Viewer Mode" (reading a file)
+  const isViewerActive = !['dashboard', 'browser'].includes(activeTab);
+
   // Monitor URL Params
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -249,6 +252,7 @@ export default function App() {
           onLogout={handleLogout}
           isOpen={isMobileMenuOpen}
           onClose={() => setIsMobileMenuOpen(false)}
+          docked={!isViewerActive} // Only dock sidebar on Desktop when NOT reading a PDF
         />
         
         {/* Main Content Area - Stacked Views for Keep-Alive */}
@@ -331,6 +335,7 @@ export default function App() {
                  onBack={() => handleCloseFile(file.id)} // "Back" closes the tab in this context
                  fileBlob={file.blob}
                  isPopup={false}
+                 onToggleNavigation={() => setIsMobileMenuOpen(true)}
               />
             </div>
           ))}

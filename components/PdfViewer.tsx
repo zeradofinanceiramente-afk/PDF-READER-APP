@@ -18,6 +18,7 @@ interface Props {
   onBack: () => void;
   fileBlob?: Blob;
   isPopup?: boolean;
+  onToggleNavigation?: () => void;
 }
 
 interface SelectionState {
@@ -472,7 +473,7 @@ const PdfPage: React.FC<PdfPageProps> = ({
 
 // --- Main Component ---
 
-export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, fileParents, uid, onBack, fileBlob, isPopup }) => {
+export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, fileParents, uid, onBack, fileBlob, isPopup, onToggleNavigation }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
@@ -978,10 +979,19 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
       {/* Minimal Header */}
       <div className="h-14 bg-surface/80 backdrop-blur border-b border-border flex items-center justify-between px-4 sticky top-0 z-30 shadow-sm">
         <div className="flex items-center gap-3 min-w-0">
+          {!isPopup && onToggleNavigation && (
+            <button 
+                onClick={onToggleNavigation}
+                className="p-2 -ml-2 hover:bg-white/10 rounded-full transition text-text mr-1"
+                title="Menu"
+            >
+                <Menu size={20} />
+            </button>
+          )}
           <button 
             onClick={onBack} 
-            className="p-2 -ml-2 hover:bg-white/10 rounded-full transition text-text"
-            title={isPopup ? "Fechar Janela" : "Voltar"}
+            className={`p-2 hover:bg-white/10 rounded-full transition text-text ${!onToggleNavigation ? '-ml-2' : ''}`}
+            title={isPopup ? "Fechar Janela" : "Voltar e Fechar"}
           >
             {isPopup ? <X size={20} /> : <ArrowLeft size={20} />}
           </button>
