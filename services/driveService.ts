@@ -32,7 +32,7 @@ export async function listDriveContents(accessToken: string, folderId: string = 
       console.error("Drive API Error:", errorData);
       throw new Error(message);
     } catch (e) {
-      if (e instanceof Error && e.message !== "Erro desconhecido na API do Drive") {
+      if (e instanceof Error && (e.message === "Unauthorized" || e.message !== "Erro desconhecido na API do Drive")) {
         throw e;
       }
       throw new Error(`Falha ao buscar arquivos (Status: ${response.status})`);
@@ -50,6 +50,7 @@ export async function downloadDriveFile(accessToken: string, driveFileId: string
   );
   
   if (!res.ok) {
+    if (res.status === 401) throw new Error("Unauthorized");
     if (res.status === 403) throw new Error("Permissão negada (403). Verifique se a API do Drive está ativada.");
     try {
         const err = await res.json();
@@ -86,6 +87,7 @@ export async function uploadFileToDrive(
   });
 
   if (!res.ok) {
+    if (res.status === 401) throw new Error("Unauthorized");
     const err = await res.json();
     throw new Error(err.error?.message || "Falha ao fazer upload");
   }
@@ -100,6 +102,7 @@ export async function deleteDriveFile(accessToken: string, fileId: string): Prom
   });
 
   if (!res.ok) {
+    if (res.status === 401) throw new Error("Unauthorized");
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error?.message || "Falha ao deletar arquivo original");
   }

@@ -1,10 +1,10 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist';
 import { PDFDocument, rgb } from 'pdf-lib';
 import { Annotation, DriveFile } from '../types';
 import { saveAnnotation, loadAnnotations } from '../services/storageService';
 import { downloadDriveFile, uploadFileToDrive, deleteDriveFile } from '../services/driveService';
-import { ArrowLeft, Highlighter, Loader2, X, Type, List, MousePointer2, Save, ScanLine, ZoomIn, ZoomOut, Menu, PaintBucket, Sliders, MoveHorizontal, Pen, Eraser, Copy, Download, FileText, Hash, Check } from 'lucide-react';
+import { ArrowLeft, Highlighter, Loader2, X, Type, List, MousePointer2, Save, ScanLine, ZoomIn, ZoomOut, Menu, PaintBucket, Sliders, MoveHorizontal, Pen, Eraser, Copy, Download, FileText, Hash, Check, ChevronUp, ChevronDown } from 'lucide-react';
 
 // Explicitly set worker to specific version to match package.json (5.4.449)
 GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.449/build/pdf.worker.min.mjs`;
@@ -72,6 +72,7 @@ interface Props {
   fileBlob?: Blob;
   isPopup?: boolean;
   onToggleNavigation?: () => void;
+  onAuthError?: () => void; // Prop para notificar erro de autenticação
 }
 
 interface SelectionState {
@@ -82,6 +83,7 @@ interface SelectionState {
   popupY: number;
   // Rects normalized to PDF coordinates (scale=1)
   relativeRects: { x: number; y: number; width: number; height: number }[];
+  position: 'top' | 'bottom'; // Control if popup is above or below selection
 }
 
 // --- Helper: Convert Points to SVG Path ---
@@ -181,7 +183,8 @@ const renderCustomTextLayer = (textContent: any, container: HTMLElement, viewpor
 interface PdfPageProps {
   pdfDoc: PDFDocumentProxy;
   pageNumber: number;
-  scale: number;
+  currentScale: number; // The user's zoom level
+  renderScale: number;  // The fixed quality level (e.g. 2.0)
   filterValues: string;
   annotations: Annotation[];
   activeTool: 'cursor' | 'text' | 'ink' | 'eraser';
@@ -197,7 +200,8 @@ interface PdfPageProps {
 const PdfPage: React.FC<PdfPageProps> = ({ 
   pdfDoc, 
   pageNumber, 
-  scale, 
+  currentScale,
+  renderScale,
   filterValues, 
   annotations,
   activeTool,
@@ -281,14 +285,15 @@ const PdfPage: React.FC<PdfPageProps> = ({
     return () => { active = false; };
   }, [pdfDoc, pageNumber]);
 
-  // 3. Calculate Dimensions synchronously (fast zoom)
+  // 3. Calculate Dimensions synchronously (depends on renderScale)
   const pageDimensions = useMemo(() => {
     if (!pageProxy) return null;
-    const viewport = pageProxy.getViewport({ scale });
+    const viewport = pageProxy.getViewport({ scale: renderScale });
     return { width: viewport.width, height: viewport.height };
-  }, [pageProxy, scale]);
+  }, [pageProxy, renderScale]);
 
   // 4. Render Content (Only when Visible AND Dimensions set)
+  // Crucial: We depend on renderScale, NOT currentScale. This prevents re-render on zoom.
   useEffect(() => {
     if (!isVisible || !pageDimensions || !pageProxy || !canvasRef.current || !textLayerRef.current) return;
     
@@ -296,7 +301,7 @@ const PdfPage: React.FC<PdfPageProps> = ({
 
     const render = async () => {
       try {
-        const viewport = pageProxy.getViewport({ scale });
+        const viewport = pageProxy.getViewport({ scale: renderScale });
         
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -348,7 +353,7 @@ const PdfPage: React.FC<PdfPageProps> = ({
           
         setRendered(true);
       } catch (err: any) {
-        // Ignore rendering cancelled errors as they are expected when zooming/scrolling fast
+        // Ignore rendering cancelled errors as they are expected when scrolling fast
         if (err?.name === 'RenderingCancelledException') {
             return;
         }
@@ -366,7 +371,7 @@ const PdfPage: React.FC<PdfPageProps> = ({
           renderTaskRef.current = null;
       }
     };
-  }, [pageProxy, scale, isVisible, pageDimensions]);
+  }, [pageProxy, renderScale, isVisible, pageDimensions]);
 
   const handleContainerClick = (e: React.MouseEvent) => {
     if (activeTool !== 'text' || !pageContainerRef.current) return;
@@ -374,9 +379,9 @@ const PdfPage: React.FC<PdfPageProps> = ({
     if ((e.target as HTMLElement).closest('.note-editor')) return;
 
     const rect = pageContainerRef.current.getBoundingClientRect();
-    // Normalize coordinates to PDF scale=1
-    const x = (e.clientX - rect.left) / scale;
-    const y = (e.clientY - rect.top) / scale;
+    // Normalize coordinates to PDF scale=1 using currentScale (since rect includes the CSS transform)
+    const x = (e.clientX - rect.left) / currentScale;
+    const y = (e.clientY - rect.top) / currentScale;
     
     // If Text tool is active, start a Draft Note instead of generic click
     setDraftNote({ x, y, text: '' });
@@ -405,8 +410,8 @@ const PdfPage: React.FC<PdfPageProps> = ({
 
     const rect = pageContainerRef.current.getBoundingClientRect();
     // Normalize coordinates to PDF scale=1
-    const x = (e.clientX - rect.left) / scale;
-    const y = (e.clientY - rect.top) / scale;
+    const x = (e.clientX - rect.left) / currentScale;
+    const y = (e.clientY - rect.top) / currentScale;
 
     setIsDrawing(true);
     setCurrentPoints([[x, y]]);
@@ -418,8 +423,8 @@ const PdfPage: React.FC<PdfPageProps> = ({
 
     const rect = pageContainerRef.current.getBoundingClientRect();
     // Normalize coordinates to PDF scale=1
-    const x = (e.clientX - rect.left) / scale;
-    const y = (e.clientY - rect.top) / scale;
+    const x = (e.clientX - rect.left) / currentScale;
+    const y = (e.clientY - rect.top) / currentScale;
 
     setCurrentPoints(prev => [...prev, [x, y]]);
   };
@@ -444,18 +449,26 @@ const PdfPage: React.FC<PdfPageProps> = ({
     setCurrentPoints([]);
   };
 
-  // Use calculated dimensions or fallback to min-height to allow intersection observer to work
-  const widthStyle = pageDimensions ? `${pageDimensions.width}px` : '100%';
-  const heightStyle = pageDimensions ? `${pageDimensions.height}px` : `${800 * scale}px`;
+  // Layout Dimensions (The spacer container)
+  const layoutWidth = pageDimensions ? pageDimensions.width * (currentScale / renderScale) : '100%';
+  const layoutHeight = pageDimensions ? pageDimensions.height * (currentScale / renderScale) : `${800 * currentScale}px`;
+
+  // Internal Rendering Dimensions
+  const internalWidth = pageDimensions ? pageDimensions.width : '100%';
+  const internalHeight = pageDimensions ? pageDimensions.height : '800px';
+
+  // CSS Transform to scale the rendered content to the visual size
+  const transformScale = currentScale / renderScale;
 
   return (
     <div 
       ref={pageContainerRef}
-      className={`pdf-page relative shadow-lg bg-white mb-4 md:mb-8 mx-auto transition-cursor select-none ${activeTool === 'text' ? 'cursor-text' : activeTool === 'ink' ? 'cursor-crosshair touch-none' : activeTool === 'eraser' ? 'cursor-[url(https://cdn-icons-png.flaticon.com/32/2661/2661282.png),_pointer]' : ''}`}
+      className={`pdf-page relative bg-white mb-4 md:mb-8 mx-auto transition-cursor select-none ${activeTool === 'text' ? 'cursor-text' : activeTool === 'ink' ? 'cursor-crosshair touch-none' : activeTool === 'eraser' ? 'cursor-[url(https://cdn-icons-png.flaticon.com/32/2661/2661282.png),_pointer]' : ''}`}
       data-page-number={pageNumber}
       style={{ 
-        width: widthStyle, 
-        height: heightStyle
+        width: layoutWidth, 
+        height: layoutHeight,
+        boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)'
       }}
       onClick={handleContainerClick}
       onPointerDown={handlePointerDown}
@@ -463,211 +476,228 @@ const PdfPage: React.FC<PdfPageProps> = ({
       onPointerUp={handlePointerUp}
       onPointerLeave={handlePointerUp}
     >
-      {!hasText && rendered && isVisible && (
-         <div className="absolute -top-6 left-0 flex items-center gap-1 text-xs text-text-sec opacity-70">
-            <ScanLine size={12} />
-            <span>Imagem (sem texto selecionável)</span>
-         </div>
-      )}
-
-      {/* Placeholder Loading State */}
-      {!rendered && isVisible && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-50 text-gray-300">
-           <Loader2 className="animate-spin w-8 h-8" />
-        </div>
-      )}
-
-      <canvas 
-        ref={canvasRef}
-        style={{ 
-          filter: 'url(#pdf-recolor)',
-          display: 'block',
-          visibility: isVisible ? 'visible' : 'hidden'
-        }}
-      />
-
-      {/* Draft Note Editor (Visual Input) */}
-      {draftNote && (
-        <div 
-          className="note-editor absolute z-50 animate-in zoom-in duration-200"
-          style={{
-            left: draftNote.x * scale,
-            top: draftNote.y * scale,
-            maxWidth: '250px'
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="bg-yellow-100 text-gray-900 rounded-lg shadow-xl border border-yellow-300 p-2 flex flex-col gap-2 w-64">
-             <div className="flex items-center justify-between border-b border-yellow-200/50 pb-1 mb-1">
-               <span className="text-[10px] uppercase font-bold text-yellow-800 tracking-wider">Nova Nota</span>
-             </div>
-             <textarea 
-               ref={noteInputRef}
-               value={draftNote.text}
-               onChange={(e) => setDraftNote({ ...draftNote, text: e.target.value })}
-               placeholder="Digite sua anotação..."
-               className="bg-transparent w-full text-sm resize-none outline-none min-h-[80px] leading-relaxed placeholder:text-yellow-700/50"
-             />
-             <div className="flex items-center gap-2 justify-end pt-1">
-               <button 
-                  onClick={() => setDraftNote(null)}
-                  className="p-1.5 rounded-md hover:bg-yellow-200 text-yellow-800 transition-colors"
-                  title="Cancelar"
-               >
-                  <X size={16} />
-               </button>
-               <button 
-                  onClick={handleSaveDraftNote}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-yellow-400 hover:bg-yellow-500 text-yellow-950 rounded-md text-xs font-bold transition-colors shadow-sm"
-               >
-                  <Check size={14} />
-                  Salvar
-               </button>
-             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Annotations Layer */}
-      {isVisible && (
-        <div className="absolute inset-0 pointer-events-none">
-          {/* SVG Layer for Ink - Scaled via Group transform to match current zoom */}
-          <svg className="absolute inset-0 w-full h-full" style={{ zIndex: 15 }}>
-            <g transform={`scale(${scale})`}>
-              {annotations.filter(a => a.type === 'ink').map((ann, i) => (
-                <path
-                  key={ann.id || `ink-${i}`}
-                  d={pointsToSvgPath(ann.points || [])}
-                  stroke={ann.color || 'red'}
-                  strokeWidth={ann.strokeWidth || 3}
-                  strokeOpacity={ann.opacity ?? 1}
-                  fill="none"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className={activeTool === 'eraser' ? 'hover:opacity-50 cursor-pointer' : ''}
-                  style={{ 
-                    pointerEvents: activeTool === 'eraser' ? 'visibleStroke' : 'none',
-                    cursor: activeTool === 'eraser' ? 'url(https://cdn-icons-png.flaticon.com/32/2661/2661282.png), pointer' : 'none'
-                  }}
-                  onClick={(e) => {
-                    if (activeTool === 'eraser' && ann.id) {
-                      e.stopPropagation();
-                      onDeleteAnnotation(ann); 
-                    }
-                  }}
-                />
-              ))}
-              {/* Current Drawing Stroke */}
-              {isDrawing && (
-                <path 
-                  d={pointsToSvgPath(currentPoints)}
-                  stroke={inkColor}
-                  strokeWidth={inkStrokeWidth}
-                  strokeOpacity={inkOpacity}
-                  fill="none"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              )}
-            </g>
-          </svg>
-
-          {annotations.map((ann, i) => {
-            const isHighlight = ann.type === 'highlight';
-            
-            // For DOM elements (Highlights/Notes), we manually scale coordinates
-            const x = ann.bbox[0] * scale;
-            const y = ann.bbox[1] * scale;
-            const w = ann.bbox[2] * scale;
-            const h = ann.bbox[3] * scale;
-
-            if (isHighlight) {
-              return (
-                <div 
-                  key={ann.id || i}
-                  id={`ann-${ann.id}`}
-                  className="annotation-item absolute mix-blend-multiply group pointer-events-auto"
-                  style={{
-                    left: x,
-                    top: y,
-                    width: w,
-                    height: h,
-                    backgroundColor: ann.color || '#facc15',
-                    opacity: ann.opacity ?? 0.4,
-                    pointerEvents: activeTool === 'cursor' ? 'none' : 'auto',
-                    cursor: activeTool === 'eraser' ? 'url(https://cdn-icons-png.flaticon.com/32/2661/2661282.png), pointer' : 'default'
-                  }}
-                  onClick={(e) => {
-                    if (activeTool === 'eraser' && ann.id) {
-                      e.stopPropagation();
-                      onDeleteAnnotation(ann);
-                    }
-                  }}
-                />
-              );
-            } else if (ann.type === 'note') {
-              return (
-                <div
-                  key={ann.id || i}
-                  id={`ann-${ann.id}`}
-                  className="annotation-item absolute z-20 group pointer-events-auto animate-in zoom-in duration-200"
-                  style={{
-                    left: x,
-                    top: y,
-                    maxWidth: '200px',
-                    cursor: activeTool === 'eraser' ? 'url(https://cdn-icons-png.flaticon.com/32/2661/2661282.png), pointer' : 'auto'
-                  }}
-                  onClick={(e) => {
-                    if (activeTool === 'eraser' && ann.id) {
-                      e.stopPropagation();
-                      onDeleteAnnotation(ann);
-                    }
-                  }}
-                >
-                  <div 
-                    className={`bg-yellow-100 text-gray-900 text-sm p-3 rounded-br-xl rounded-bl-sm rounded-tr-sm rounded-tl-sm shadow-md border border-yellow-300 relative hover:scale-105 transition-transform ${activeTool === 'eraser' ? 'hover:opacity-50' : ''}`}
-                    style={{ backgroundColor: ann.color || '#fef9c3' }}
-                  >
-                    <p className="whitespace-pre-wrap break-words font-medium leading-relaxed">{ann.text}</p>
-                    
-                    {ann.id && !ann.id.startsWith('temp') && activeTool !== 'eraser' && (
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteAnnotation(ann);
-                        }}
-                        className="absolute -top-2 -right-2 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-sm pointer-events-auto cursor-pointer"
-                        title="Excluir Nota"
-                      >
-                        <X size={10} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            }
-            return null;
-          })}
-        </div>
-      )}
-
+      {/* Transformed Content Container */}
       <div 
-        ref={textLayerRef} 
-        className={`textLayer ${activeTool === 'text' ? 'pointer-events-none' : ''}`}
-        style={{ 
-          zIndex: 10, 
-          pointerEvents: activeTool === 'ink' || activeTool === 'eraser' ? 'none' : 'auto',
-          visibility: isVisible ? 'visible' : 'hidden'
+        style={{
+          width: internalWidth,
+          height: internalHeight,
+          transform: `scale(${transformScale})`,
+          transformOrigin: '0 0',
+          position: 'relative'
         }}
-      />
+      >
+        {!hasText && rendered && isVisible && (
+           <div className="absolute -top-6 left-0 flex items-center gap-1 text-xs text-text-sec opacity-70" style={{ transform: `scale(${1/transformScale})`, transformOrigin: '0 0' }}>
+              <ScanLine size={12} />
+              <span>Imagem (sem texto selecionável)</span>
+           </div>
+        )}
+
+        {/* Placeholder Loading State */}
+        {!rendered && isVisible && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-50 text-gray-300">
+             <Loader2 className="animate-spin w-8 h-8" />
+          </div>
+        )}
+
+        <canvas 
+          ref={canvasRef}
+          style={{ 
+            filter: 'url(#pdf-recolor)',
+            display: 'block',
+            visibility: isVisible ? 'visible' : 'hidden'
+          }}
+        />
+
+        {/* Draft Note Editor (Visual Input) */}
+        {draftNote && (
+          <div 
+            className="note-editor absolute z-50 animate-in zoom-in duration-200"
+            style={{
+              left: draftNote.x * renderScale,
+              top: draftNote.y * renderScale,
+              maxWidth: '250px',
+              transform: `scale(${1/transformScale})`, // Counter-scale to keep UI constant size
+              transformOrigin: 'top left'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-yellow-100 text-gray-900 rounded-lg shadow-xl border border-yellow-300 p-2 flex flex-col gap-2 w-64">
+               <div className="flex items-center justify-between border-b border-yellow-200/50 pb-1 mb-1">
+                 <span className="text-[10px] uppercase font-bold text-yellow-800 tracking-wider">Nova Nota</span>
+               </div>
+               <textarea 
+                 ref={noteInputRef}
+                 value={draftNote.text}
+                 onChange={(e) => setDraftNote({ ...draftNote, text: e.target.value })}
+                 placeholder="Digite sua anotação..."
+                 className="bg-transparent w-full text-sm resize-none outline-none min-h-[80px] leading-relaxed placeholder:text-yellow-700/50"
+               />
+               <div className="flex items-center gap-2 justify-end pt-1">
+                 <button 
+                    onClick={() => setDraftNote(null)}
+                    className="p-1.5 rounded-md hover:bg-yellow-200 text-yellow-800 transition-colors"
+                    title="Cancelar"
+                 >
+                    <X size={16} />
+                 </button>
+                 <button 
+                    onClick={handleSaveDraftNote}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-yellow-400 hover:bg-yellow-500 text-yellow-950 rounded-md text-xs font-bold transition-colors shadow-sm"
+                 >
+                    <Check size={14} />
+                    Salvar
+                 </button>
+               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Annotations Layer */}
+        {isVisible && (
+          <div className="absolute inset-0 pointer-events-none">
+            {/* SVG Layer for Ink - Scaled via Group transform to match current zoom */}
+            <svg className="absolute inset-0 w-full h-full" style={{ zIndex: 15 }}>
+              <g transform={`scale(${renderScale})`}>
+                {annotations.filter(a => a.type === 'ink').map((ann, i) => (
+                  <path
+                    key={ann.id || `ink-${i}`}
+                    d={pointsToSvgPath(ann.points || [])}
+                    stroke={ann.color || 'red'}
+                    strokeWidth={ann.strokeWidth || 3}
+                    strokeOpacity={ann.opacity ?? 1}
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className={activeTool === 'eraser' ? 'hover:opacity-50 cursor-pointer' : ''}
+                    style={{ 
+                      pointerEvents: activeTool === 'eraser' ? 'visibleStroke' : 'none',
+                      cursor: activeTool === 'eraser' ? 'url(https://cdn-icons-png.flaticon.com/32/2661/2661282.png), pointer' : 'none'
+                    }}
+                    onClick={(e) => {
+                      if (activeTool === 'eraser' && ann.id) {
+                        e.stopPropagation();
+                        onDeleteAnnotation(ann); 
+                      }
+                    }}
+                  />
+                ))}
+                {/* Current Drawing Stroke */}
+                {isDrawing && (
+                  <path 
+                    d={pointsToSvgPath(currentPoints)}
+                    stroke={inkColor}
+                    strokeWidth={inkStrokeWidth}
+                    strokeOpacity={inkOpacity}
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                )}
+              </g>
+            </svg>
+
+            {annotations.map((ann, i) => {
+              const isHighlight = ann.type === 'highlight';
+              
+              // We use renderScale here because we are inside the transformed container
+              const x = ann.bbox[0] * renderScale;
+              const y = ann.bbox[1] * renderScale;
+              const w = ann.bbox[2] * renderScale;
+              const h = ann.bbox[3] * renderScale;
+
+              if (isHighlight) {
+                return (
+                  <div 
+                    key={ann.id || i}
+                    id={`ann-${ann.id}`}
+                    className="annotation-item absolute mix-blend-multiply group pointer-events-auto"
+                    style={{
+                      left: x,
+                      top: y,
+                      width: w,
+                      height: h,
+                      backgroundColor: ann.color || '#facc15',
+                      opacity: ann.opacity ?? 0.4,
+                      pointerEvents: activeTool === 'cursor' ? 'none' : 'auto',
+                      cursor: activeTool === 'eraser' ? 'url(https://cdn-icons-png.flaticon.com/32/2661/2661282.png), pointer' : 'default'
+                    }}
+                    onClick={(e) => {
+                      if (activeTool === 'eraser' && ann.id) {
+                        e.stopPropagation();
+                        onDeleteAnnotation(ann);
+                      }
+                    }}
+                  />
+                );
+              } else if (ann.type === 'note') {
+                return (
+                  <div
+                    key={ann.id || i}
+                    id={`ann-${ann.id}`}
+                    className="annotation-item absolute z-20 group pointer-events-auto animate-in zoom-in duration-200"
+                    style={{
+                      left: x,
+                      top: y,
+                      maxWidth: '200px',
+                      cursor: activeTool === 'eraser' ? 'url(https://cdn-icons-png.flaticon.com/32/2661/2661282.png), pointer' : 'auto',
+                      // Counter-scale notes so they don't get huge when zoomed
+                      transform: `scale(${1/transformScale})`,
+                      transformOrigin: 'top left' 
+                    }}
+                    onClick={(e) => {
+                      if (activeTool === 'eraser' && ann.id) {
+                        e.stopPropagation();
+                        onDeleteAnnotation(ann);
+                      }
+                    }}
+                  >
+                    <div 
+                      className={`bg-yellow-100 text-gray-900 text-sm p-3 rounded-br-xl rounded-bl-sm rounded-tr-sm rounded-tl-sm shadow-md border border-yellow-300 relative hover:scale-105 transition-transform ${activeTool === 'eraser' ? 'hover:opacity-50' : ''}`}
+                      style={{ backgroundColor: ann.color || '#fef9c3' }}
+                    >
+                      <p className="whitespace-pre-wrap break-words font-medium leading-relaxed">{ann.text}</p>
+                      
+                      {ann.id && !ann.id.startsWith('temp') && activeTool !== 'eraser' && (
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteAnnotation(ann);
+                          }}
+                          className="absolute -top-2 -right-2 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-sm pointer-events-auto cursor-pointer"
+                          title="Excluir Nota"
+                        >
+                          <X size={10} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+              return null;
+            })}
+          </div>
+        )}
+
+        <div 
+          ref={textLayerRef} 
+          className={`textLayer ${activeTool === 'text' ? 'pointer-events-none' : ''}`}
+          style={{ 
+            zIndex: 10, 
+            pointerEvents: activeTool === 'ink' || activeTool === 'eraser' ? 'none' : 'auto',
+            visibility: isVisible ? 'visible' : 'hidden'
+          }}
+        />
+      </div>
     </div>
   );
 };
 
 // --- Main Component ---
 
-export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, fileParents, uid, onBack, fileBlob, isPopup, onToggleNavigation }) => {
+export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, fileParents, uid, onBack, fileBlob, isPopup, onToggleNavigation, onAuthError }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
   const [originalBlob, setOriginalBlob] = useState<Blob | null>(null);
@@ -676,7 +706,17 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
-  const [scale, setScale] = useState(1.0); // Start with 1.0, will auto-adjust
+  
+  // Page Navigation State
+  const [currentPageNumber, setCurrentPageNumber] = useState(1);
+  const [isEditingPage, setIsEditingPage] = useState(false);
+  const [tempPageInput, setTempPageInput] = useState("1");
+  
+  // Fixed Render Scale: 2.0 provides good quality up to 200% zoom.
+  // We use CSS transforms to scale visually, keeping DOM intact.
+  const RENDER_SCALE = 2.0;
+  
+  const [scale, setScale] = useState(1.0); // Visual scale
   
   // Selection & Tools State
   const [selection, setSelection] = useState<SelectionState | null>(null);
@@ -780,7 +820,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
     window.URL.revokeObjectURL(url);
   };
 
-  const handleDeleteAnnotation = (target: Annotation) => {
+  const handleDeleteAnnotation = useCallback((target: Annotation) => {
     // If it's a Note or Ink or doesn't have text, try deleting by ID first
     if (target.type === 'ink' || target.type === 'note' || !target.text) {
          // Delete specific item (Ink or valid ID)
@@ -793,7 +833,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
              !(a.page === target.page && a.text === target.text && a.type === target.type)
          ));
     }
-  };
+  }, []);
 
   // Load PDF
   useEffect(() => {
@@ -836,6 +876,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
           // Calculate Auto-Fit Width
           try {
             const page = await pdf.getPage(1);
+            // Get viewport at standard scale to calculate fit
             const viewport = page.getViewport({ scale: 1 });
             const containerWidth = window.innerWidth;
             const isMobile = containerWidth < 768;
@@ -851,9 +892,21 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
             setScale(1.2); // Fallback
           }
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error("Error loading PDF:", err);
-        alert(`Falha ao carregar PDF. Verifique se o arquivo é válido. (Erro: ${err instanceof Error ? err.message : String(err)})`);
+        // Intercept 401 Unauthorized
+        if (err.message === "Unauthorized" || (err.message && err.message.includes("401"))) {
+            if (onAuthError) {
+                onAuthError();
+                // We do NOT set loading to false here to avoid flashing empty state before renewal overlay appears
+                return;
+            }
+        }
+        
+        if (mounted) {
+            alert(`Falha ao carregar PDF. Verifique se o arquivo é válido. (Erro: ${err instanceof Error ? err.message : String(err)})`);
+            setLoading(false);
+        }
       } finally {
         if (mounted) setLoading(false);
       }
@@ -877,6 +930,71 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
     } catch (e) {
       console.error(e);
     }
+  };
+
+  // --- Scroll Detection Logic ---
+  const handleScroll = useCallback(() => {
+    if (scrollTimeoutRef.current) return;
+    
+    // Throttle scroll events (100ms)
+    scrollTimeoutRef.current = setTimeout(() => {
+        if (!containerRef.current) {
+            scrollTimeoutRef.current = null;
+            return;
+        }
+
+        const container = containerRef.current;
+        const containerRect = container.getBoundingClientRect();
+        
+        // Find which page is most visible (closest to vertical center of viewport)
+        const centerY = containerRect.top + (containerRect.height / 2);
+        
+        const pages = container.querySelectorAll('.pdf-page');
+        let closestPage = currentPageNumber;
+        let minDistance = Infinity;
+
+        pages.forEach((page) => {
+            const rect = page.getBoundingClientRect();
+            // Distance from page center to viewport center
+            const pageCenterY = rect.top + (rect.height / 2);
+            const distance = Math.abs(pageCenterY - centerY);
+
+            if (distance < minDistance) {
+                minDistance = distance;
+                const pageNum = parseInt(page.getAttribute('data-page-number') || '1');
+                if (!isNaN(pageNum)) {
+                    closestPage = pageNum;
+                }
+            }
+        });
+
+        if (closestPage !== currentPageNumber && !isEditingPage) {
+            setCurrentPageNumber(closestPage);
+        }
+
+        scrollTimeoutRef.current = null;
+    }, 100);
+  }, [currentPageNumber, isEditingPage]);
+
+  // --- Jump to Page Logic ---
+  const jumpToPage = useCallback((pageNumber: number) => {
+     if (pageNumber < 1) pageNumber = 1;
+     if (pageNumber > numPages) pageNumber = numPages;
+
+     const pageEl = containerRef.current?.querySelector(`.pdf-page[data-page-number="${pageNumber}"]`);
+     if (pageEl) {
+         pageEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+         setCurrentPageNumber(pageNumber); // Optimistic update
+     }
+  }, [numPages]);
+
+  const handlePageSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const page = parseInt(tempPageInput);
+    if (!isNaN(page)) {
+        jumpToPage(page);
+    }
+    setIsEditingPage(false);
   };
 
   // Global Selection Handler (For Highlight)
@@ -920,11 +1038,25 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
         const containerRect = container.getBoundingClientRect();
         
         // Calculate coords relative to the container content area (for popup)
+        // Default: Bottom of selection
+        let popupY = boundingRect.bottom - containerRect.top + container.scrollTop + 10;
+        let position: 'top' | 'bottom' = 'bottom';
+
+        // Check if popup would go below the visible container area
+        // boundingRect.bottom is relative to viewport. containerRect.bottom is relative to viewport.
+        const gapBelow = containerRect.bottom - boundingRect.bottom;
+        
+        // If less than 60px space below, show ABOVE selection
+        if (gapBelow < 60) {
+           popupY = boundingRect.top - containerRect.top + container.scrollTop - 60; // 60px approx height + padding
+           position = 'top';
+        }
+
         const popupX = boundingRect.left - containerRect.left + container.scrollLeft + (boundingRect.width / 2);
-        const popupY = boundingRect.bottom - containerRect.top + container.scrollTop + 10;
 
         const pageRect = pageElement.getBoundingClientRect();
         // NORMALIZE RECTS: Convert screen pixels to PDF Points (scale = 1)
+        // We divide by currentScale because the pageRect includes the CSS transform scale.
         const relativeRects = rects.map(r => ({
           x: (r.left - pageRect.left) / scale,
           y: (r.top - pageRect.top) / scale,
@@ -937,7 +1069,8 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
           text: text,
           popupX,
           popupY,
-          relativeRects
+          relativeRects,
+          position
         });
       }, 50);
     };
@@ -981,17 +1114,17 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
     saveAnnotationsList(newAnns);
   };
 
-  const handleAddNote = async (ann: Annotation) => {
+  const handleAddNote = useCallback(async (ann: Annotation) => {
     setAnnotations(prev => [...prev, ann]);
     saveAnnotationsList([ann]);
     setActiveTool('cursor'); // Reset tool after adding
-  };
+  }, []);
 
-  const addInkAnnotation = async (ann: Annotation) => {
+  const addInkAnnotation = useCallback(async (ann: Annotation) => {
     // ann already has temp id from PdfPage and normalized points
     setAnnotations(prev => [...prev, ann]);
     saveAnnotationsList([ann]);
-  };
+  }, []);
 
   const saveAnnotationsList = async (anns: Annotation[]) => {
     setIsSaving(true);
@@ -1097,6 +1230,13 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
 
     } catch (err: any) {
       console.error("Export error:", err);
+      // Intercept 401
+      if (err.message === "Unauthorized" || (err.message && err.message.includes("401"))) {
+         if (onAuthError) {
+             onAuthError();
+             return;
+         }
+      }
       alert("Falha ao salvar no Drive: " + err.message);
     } finally {
       setIsExporting(false);
@@ -1489,6 +1629,56 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
                     </button>
                 </div>
 
+                {/* Page Navigation Group (NEW) */}
+                <div className="flex items-center gap-1 pr-2 border-r border-white/20">
+                    <button 
+                        onClick={() => jumpToPage(currentPageNumber - 1)}
+                        className="p-1.5 rounded-full text-gray-400 hover:text-white hover:bg-white/10"
+                        title="Página Anterior"
+                        disabled={currentPageNumber <= 1}
+                    >
+                        <ChevronUp size={16} />
+                    </button>
+                    
+                    <form onSubmit={handlePageSubmit} className="flex items-center justify-center min-w-[60px]">
+                        {isEditingPage ? (
+                            <input 
+                                autoFocus
+                                type="text"
+                                value={tempPageInput}
+                                onChange={(e) => setTempPageInput(e.target.value)}
+                                onBlur={() => {
+                                    setIsEditingPage(false);
+                                    handlePageSubmit({ preventDefault: () => {} } as any);
+                                }}
+                                className="w-10 bg-white/20 text-white text-center rounded text-sm font-mono outline-none border border-white/30"
+                            />
+                        ) : (
+                            <button 
+                                type="button"
+                                onClick={() => {
+                                    setTempPageInput(currentPageNumber.toString());
+                                    setIsEditingPage(true);
+                                }}
+                                className="text-sm font-mono text-white hover:bg-white/10 px-1 rounded transition-colors"
+                            >
+                                {currentPageNumber}
+                            </button>
+                        )}
+                        <span className="text-xs text-gray-500 mx-1">/</span>
+                        <span className="text-xs text-gray-400">{numPages}</span>
+                    </form>
+
+                    <button 
+                        onClick={() => jumpToPage(currentPageNumber + 1)}
+                        className="p-1.5 rounded-full text-gray-400 hover:text-white hover:bg-white/10"
+                        title="Próxima Página"
+                        disabled={currentPageNumber >= numPages}
+                    >
+                        <ChevronDown size={16} />
+                    </button>
+                </div>
+
                 {/* Zoom Group */}
                 <div className="flex items-center gap-1">
                     <button 
@@ -1522,6 +1712,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
         <div 
             className="flex-1 overflow-auto bg-gray-100/50 relative flex justify-center" 
             ref={containerRef}
+            onScroll={handleScroll}
             onClick={(e) => {
               if (activeTool === 'text') {
                   const target = e.target as HTMLElement;
@@ -1531,6 +1722,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
                   }
               }
             }}
+            style={{ overflowAnchor: 'none' }} // PREVENTS SCROLL JUMPING ON DOM CHANGES
         >
             {/* Floating Selection Menu - MOVED INSIDE SCROLL CONTAINER */}
             {selection && (
@@ -1558,8 +1750,12 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
                       <X size={16} />
                     </button>
                 </div>
-                {/* Little arrow pointing up */}
-                <div className="w-3 h-3 bg-surface border-t border-l border-border transform rotate-45 absolute -top-1.5 left-1/2 -translate-x-1/2"></div>
+                {/* Arrow Pointer */}
+                {selection.position === 'top' ? (
+                   <div className="w-3 h-3 bg-surface border-b border-r border-border transform rotate-45 absolute -bottom-1.5 left-1/2 -translate-x-1/2"></div>
+                ) : (
+                   <div className="w-3 h-3 bg-surface border-t border-l border-border transform rotate-45 absolute -top-1.5 left-1/2 -translate-x-1/2"></div>
+                )}
               </div>
             )}
 
@@ -1569,7 +1765,8 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
                 key={i + 1}
                 pageNumber={i + 1}
                 pdfDoc={pdfDoc!}
-                scale={scale}
+                currentScale={scale}
+                renderScale={RENDER_SCALE}
                 filterValues={filterValues}
                 annotations={annotations.filter(a => a.page === i + 1)}
                 activeTool={activeTool}

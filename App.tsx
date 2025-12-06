@@ -9,38 +9,23 @@ import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { DriveFile } from './types';
-import { ShieldCheck, LogIn, RefreshCw, AlertCircle, XCircle, Copy, Menu } from 'lucide-react';
+import { ShieldCheck, LogIn, RefreshCw, AlertCircle, XCircle, Copy, Menu, Lock } from 'lucide-react';
 
-// Helpers para Local Storage com Expiração
+// Helpers para Local Storage (Token do Drive)
 const TOKEN_KEY = 'drive_access_token';
-const EXPIRY_KEY = 'drive_token_expiry';
 
+// Alteração: Não verificamos mais a validade temporal estrita aqui.
+// Deixamos a API retornar 401 se estiver expirado, para tratarmos graciosamente.
 const getStoredToken = () => {
-  const token = localStorage.getItem(TOKEN_KEY);
-  const expiry = localStorage.getItem(EXPIRY_KEY);
-  
-  if (!token || !expiry) return null;
-  
-  // Se o token já expirou (ou está prestes a expirar nos próximos 5 min), descartamos
-  if (Date.now() > parseInt(expiry)) {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(EXPIRY_KEY);
-    return null;
-  }
-  
-  return token;
+  return localStorage.getItem(TOKEN_KEY);
 };
 
 const saveToken = (token: string) => {
   localStorage.setItem(TOKEN_KEY, token);
-  // Token do Google dura 1h (3600s). Definimos expiração segura de 50 minutos.
-  const expiryTime = Date.now() + (50 * 60 * 1000);
-  localStorage.setItem(EXPIRY_KEY, expiryTime.toString());
 };
 
 const clearToken = () => {
   localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(EXPIRY_KEY);
 };
 
 export default function App() {
@@ -48,6 +33,9 @@ export default function App() {
   const [accessToken, setAccessToken] = useState<string | null>(() => getStoredToken());
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [authError, setAuthError] = useState<{title: string, message: string, code?: string} | null>(null);
+  
+  // Novo estado: Controla se a sessão do Drive expirou (sem deslogar o usuário do Firebase)
+  const [sessionExpired, setSessionExpired] = useState(false);
   
   // --- Navigation & Tab State ---
   // activeTab controls what is currently visible: 'dashboard' | 'browser' | [fileId]
@@ -122,6 +110,7 @@ export default function App() {
       const result = await signInWithGoogleDrive();
       setAccessToken(result.accessToken);
       saveToken(result.accessToken);
+      setSessionExpired(false); // Limpa estado de expiração se houver
     } catch (e: any) {
       console.error("Login error full:", e);
       let errorData = {
@@ -142,8 +131,14 @@ export default function App() {
     }
   };
 
+  const handleRefreshSession = async () => {
+    // Mesma lógica de login, mas focado em renovar o token
+    await handleLogin();
+  };
+
   const handleLogout = async () => {
     setAuthError(null);
+    setSessionExpired(false);
     await logout();
     setAccessToken(null);
     clearToken();
@@ -153,8 +148,9 @@ export default function App() {
   };
 
   const handleAuthError = () => {
-    setAccessToken(null);
-    clearToken();
+    // Em vez de limpar o token e causar logout, marcamos como expirado.
+    // Isso permite mostrar uma UI de "Renovar" sem perder o contexto do usuário.
+    setSessionExpired(true);
   };
 
   // --- Tab Management Logic ---
@@ -245,6 +241,7 @@ export default function App() {
           onBack={() => window.close()}
           fileBlob={activeFile.blob}
           isPopup={true}
+          onAuthError={handleAuthError} // Pass error handler
         />
       </ErrorBoundary>
     );
@@ -253,7 +250,7 @@ export default function App() {
   // Main App Layout (Sidebar + Tabbed Content)
   return (
     <>
-      <div className="flex h-screen w-full bg-bg overflow-hidden transition-colors duration-300">
+      <div className="flex h-screen w-full bg-bg overflow-hidden transition-colors duration-300 relative">
         <Sidebar 
           activeTab={activeTab}
           onSwitchTab={handleTabSwitch}
@@ -289,19 +286,22 @@ export default function App() {
              </div>
           )}
 
-           {/* Token Expired Wall */}
-           {user && activeTab === 'browser' && !accessToken && (
-             <div className="absolute inset-0 z-20 bg-bg p-6 flex flex-col animate-in fade-in">
-                 <div className="mb-6">
-                   <button onClick={() => setIsSidebarOpen(true)} className="p-3 -ml-3 text-text-sec hover:text-text">
-                     <Menu size={32} />
-                   </button>
-                 </div>
-                 <div className="flex-1 flex flex-col items-center justify-center text-center">
-                    <AlertCircle size={64} className="text-yellow-500 mb-6" />
-                    <h2 className="text-3xl font-bold mb-4 text-text">Conexão Expirada</h2>
-                    <button onClick={handleLogin} className="btn-primary flex items-center gap-3 py-4 px-8 bg-brand text-bg rounded-full text-lg font-bold">
-                      <RefreshCw size={24} /> Reconectar Drive
+           {/* OVERLAY DE RENOVAÇÃO DE SESSÃO */}
+           {user && sessionExpired && (
+             <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in duration-300">
+                 <div className="bg-surface border border-border rounded-3xl p-8 max-w-md w-full text-center shadow-2xl">
+                    <div className="w-16 h-16 bg-yellow-500/10 text-yellow-500 rounded-full flex items-center justify-center mx-auto mb-6">
+                       <Lock size={32} />
+                    </div>
+                    <h2 className="text-2xl font-bold mb-3 text-text">Sessão Pausada</h2>
+                    <p className="text-text-sec mb-8 leading-relaxed">
+                       Por segurança, o Google requer que você renove o acesso aos arquivos a cada hora. Clique abaixo para continuar de onde parou.
+                    </p>
+                    <button 
+                      onClick={handleRefreshSession} 
+                      className="w-full flex items-center justify-center gap-3 py-4 bg-brand text-bg rounded-xl text-lg font-bold hover:brightness-110 transition-all"
+                    >
+                      <RefreshCw size={20} /> Renovar Sessão
                     </button>
                  </div>
              </div>
@@ -328,7 +328,7 @@ export default function App() {
                     accessToken={accessToken}
                     onSelectFile={handleOpenFile}
                     onLogout={handleLogout}
-                    onAuthError={handleAuthError}
+                    onAuthError={handleAuthError} // Changed: Triggers sessionExpired instead of logout
                     onToggleMenu={() => setIsSidebarOpen(prev => !prev)}
                   />
                 </ErrorBoundary>
@@ -353,6 +353,7 @@ export default function App() {
                    fileBlob={file.blob}
                    isPopup={false}
                    onToggleNavigation={() => setIsSidebarOpen(prev => !prev)}
+                   onAuthError={handleAuthError} // Changed: Pass error handler to viewer
                 />
               </ErrorBoundary>
             </div>
@@ -361,8 +362,8 @@ export default function App() {
         </main>
       </div>
       
-      {/* Error Toast */}
-      {authError && (
+      {/* Error Toast (Non-session errors) */}
+      {authError && !sessionExpired && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-md p-4 animate-in slide-in-from-top-4">
           <div className="bg-surface border border-red-500/50 rounded-xl shadow-2xl p-4 flex gap-4 text-text relative">
             <div className="bg-red-500/10 p-2 rounded-full h-fit text-red-500"><AlertCircle size={24} /></div>
