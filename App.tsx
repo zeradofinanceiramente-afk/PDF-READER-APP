@@ -7,6 +7,7 @@ import { DriveBrowser } from './components/DriveBrowser';
 import { PdfViewer } from './components/PdfViewer';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { DriveFile } from './types';
 import { ShieldCheck, LogIn, RefreshCw, AlertCircle, XCircle, Copy, Menu } from 'lucide-react';
 
@@ -207,6 +208,11 @@ export default function App() {
     if (window.innerWidth < 768) setIsSidebarOpen(false);
   };
 
+  // Callback to recover from ErrorBoundary
+  const handleRecover = () => {
+    setActiveTab('dashboard');
+  };
+
   if (loadingAuth) {
     return <div className="h-screen w-full flex items-center justify-center bg-bg text-text">Carregando...</div>;
   }
@@ -229,16 +235,18 @@ export default function App() {
     if (!activeFile) return <div className="p-10 text-text">Arquivo não encontrado.</div>;
 
     return (
-      <PdfViewer 
-        accessToken={accessToken}
-        fileId={activeFile.id}
-        fileName={activeFile.name}
-        fileParents={activeFile.parents}
-        uid={user.uid}
-        onBack={() => window.close()}
-        fileBlob={activeFile.blob}
-        isPopup={true}
-      />
+      <ErrorBoundary>
+        <PdfViewer 
+          accessToken={accessToken}
+          fileId={activeFile.id}
+          fileName={activeFile.name}
+          fileParents={activeFile.parents}
+          uid={user.uid}
+          onBack={() => window.close()}
+          fileBlob={activeFile.blob}
+          isPopup={true}
+        />
+      </ErrorBoundary>
     );
   }
 
@@ -301,25 +309,29 @@ export default function App() {
 
           {/* DASHBOARD VIEW */}
           <div className="w-full h-full" style={{ display: activeTab === 'dashboard' ? 'block' : 'none' }}>
-            <Dashboard 
-              userName={user?.displayName}
-              onOpenFile={handleOpenFile}
-              onUploadLocal={handleLocalUpload}
-              onChangeView={(v) => handleTabSwitch(v)}
-              onToggleMenu={() => setIsSidebarOpen(prev => !prev)}
-            />
+            <ErrorBoundary onReset={handleRecover}>
+              <Dashboard 
+                userName={user?.displayName}
+                onOpenFile={handleOpenFile}
+                onUploadLocal={handleLocalUpload}
+                onChangeView={(v) => handleTabSwitch(v)}
+                onToggleMenu={() => setIsSidebarOpen(prev => !prev)}
+              />
+            </ErrorBoundary>
           </div>
 
           {/* BROWSER VIEW */}
           <div className="w-full h-full" style={{ display: activeTab === 'browser' ? 'block' : 'none' }}>
              {user && accessToken && (
-                <DriveBrowser 
-                  accessToken={accessToken}
-                  onSelectFile={handleOpenFile}
-                  onLogout={handleLogout}
-                  onAuthError={handleAuthError}
-                  onToggleMenu={() => setIsSidebarOpen(prev => !prev)}
-                />
+                <ErrorBoundary onReset={handleRecover}>
+                  <DriveBrowser 
+                    accessToken={accessToken}
+                    onSelectFile={handleOpenFile}
+                    onLogout={handleLogout}
+                    onAuthError={handleAuthError}
+                    onToggleMenu={() => setIsSidebarOpen(prev => !prev)}
+                  />
+                </ErrorBoundary>
              )}
           </div>
 
@@ -330,17 +342,19 @@ export default function App() {
               className="w-full h-full absolute inset-0 bg-bg"
               style={{ display: activeTab === file.id ? 'block' : 'none' }}
             >
-              <PdfViewer 
-                 accessToken={accessToken}
-                 fileId={file.id}
-                 fileName={file.name}
-                 fileParents={file.parents}
-                 uid={user ? user.uid : 'guest'}
-                 onBack={() => handleCloseFile(file.id)} // "Back" closes the tab in this context
-                 fileBlob={file.blob}
-                 isPopup={false}
-                 onToggleNavigation={() => setIsSidebarOpen(prev => !prev)}
-              />
+              <ErrorBoundary onReset={() => handleCloseFile(file.id)}>
+                <PdfViewer 
+                   accessToken={accessToken}
+                   fileId={file.id}
+                   fileName={file.name}
+                   fileParents={file.parents}
+                   uid={user ? user.uid : 'guest'}
+                   onBack={() => handleCloseFile(file.id)} // "Back" closes the tab in this context
+                   fileBlob={file.blob}
+                   isPopup={false}
+                   onToggleNavigation={() => setIsSidebarOpen(prev => !prev)}
+                />
+              </ErrorBoundary>
             </div>
           ))}
 

@@ -7,7 +7,10 @@ const urlsToCache = [
   '/',
   '/index.html',
   'https://cdn.tailwindcss.com', // Cacheando dependências externas
-  'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.449/web/pdf_viewer.css'
+  'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.449/web/pdf_viewer.css',
+  // IMPORTANT: Explicitly cache the PDF Worker to ensure offline rendering.
+  // This URL MUST match exactly what is used in PdfViewer.tsx -> GlobalWorkerOptions.workerSrc
+  'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.449/build/pdf.worker.min.mjs'
 ];
 
 // Instalação do SW

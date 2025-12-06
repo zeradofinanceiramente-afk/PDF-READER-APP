@@ -4,10 +4,63 @@ import { PDFDocument, rgb } from 'pdf-lib';
 import { Annotation, DriveFile } from '../types';
 import { saveAnnotation, loadAnnotations } from '../services/storageService';
 import { downloadDriveFile, uploadFileToDrive, deleteDriveFile } from '../services/driveService';
-import { ArrowLeft, Highlighter, Loader2, X, Type, List, MousePointer2, Save, ScanLine, ZoomIn, ZoomOut, Menu, PaintBucket, Sliders, MoveHorizontal, Pen, Eraser, Copy, Download, FileText } from 'lucide-react';
+import { ArrowLeft, Highlighter, Loader2, X, Type, List, MousePointer2, Save, ScanLine, ZoomIn, ZoomOut, Menu, PaintBucket, Sliders, MoveHorizontal, Pen, Eraser, Copy, Download, FileText, Hash, Check } from 'lucide-react';
 
 // Explicitly set worker to specific version to match package.json (5.4.449)
 GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.449/build/pdf.worker.min.mjs`;
+
+// --- Dynamic Font Loader ---
+const attemptedFonts = new Set<string>();
+
+/**
+ * Tenta baixar automaticamente uma fonte do Google Fonts se ela não estiver no sistema.
+ * Remove prefixos de subset (Ex: "ABCDE+Roboto-Bold" -> "Roboto")
+ */
+const tryAutoDownloadFont = (rawFontName: string) => {
+  if (!navigator.onLine) return; // Não faz nada se offline
+  
+  // Limpeza do nome da fonte
+  // 1. Remove aspas
+  let cleanName = rawFontName.replace(/['"]/g, '').trim();
+  
+  // 2. Remove prefixo de subset do PDF (6 letras maiúsculas + '+')
+  if (cleanName.includes('+')) {
+    cleanName = cleanName.split('+')[1];
+  }
+
+  // 3. Extrai apenas o nome da família (remove -Bold, -Italic, etc para a busca na API)
+  // Ex: "Roboto-Bold" -> "Roboto"
+  const familyName = cleanName.split('-')[0];
+
+  // Evita requisições duplicadas ou desnecessárias para fontes padrão
+  const skipList = ['Arial', 'Helvetica', 'Times', 'Courier', 'Verdana', 'Georgia', 'sans-serif', 'serif', 'monospace'];
+  if (attemptedFonts.has(familyName) || skipList.some(s => familyName.toLowerCase().includes(s.toLowerCase()))) {
+    return;
+  }
+
+  attemptedFonts.add(familyName);
+  console.log(`[Auto-Font] Tentando baixar fonte ausente: ${familyName}`);
+
+  // Constrói URL do Google Fonts (solicitando pesos comuns para garantir compatibilidade)
+  const googleFontUrl = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(familyName)}:wght@300;400;500;700&display=swap`;
+
+  const link = document.createElement('link');
+  link.href = googleFontUrl;
+  link.rel = 'stylesheet';
+  link.id = `dynamic-font-${familyName}`;
+
+  link.onload = () => {
+    console.log(`[Auto-Font] Fonte carregada com sucesso: ${familyName}`);
+    // Força um reflow leve ou re-verificação se necessário, mas o browser costuma aplicar automaticamente
+  };
+  
+  link.onerror = () => {
+    console.warn(`[Auto-Font] Fonte não encontrada no Google Fonts: ${familyName}`);
+    link.remove(); // Limpa se falhar
+  };
+
+  document.head.appendChild(link);
+};
 
 interface Props {
   accessToken?: string | null;
@@ -42,6 +95,9 @@ const pointsToSvgPath = (points: number[][]) => {
 const renderCustomTextLayer = (textContent: any, container: HTMLElement, viewport: any) => {
   container.innerHTML = '';
   
+  // Track previous Y to detect line breaks
+  let lastY = -1;
+
   textContent.items.forEach((item: any) => {
     // FIX: Do not trim whitespace. Rendering spaces is crucial for smooth text selection (prevents snapping).
     if (!item.str || item.str.length === 0) return;
@@ -60,6 +116,14 @@ const renderCustomTextLayer = (textContent: any, container: HTMLElement, viewpor
     const scaleX = fontHeight > 0 ? (fontWidth / fontHeight) : 1;
 
     const fontSize = fontHeight * viewport.scale;
+
+    // --- FIX FOR SELECTION JUMPING ---
+    // If the vertical position changes significantly (indicating a new line), insert a <br>.
+    // This creates a DOM boundary preventing selection from merging adjacent lines/paragraphs.
+    if (lastY !== -1 && Math.abs(y - lastY) > fontSize * 0.5) {
+      container.appendChild(document.createElement('br'));
+    }
+    lastY = y;
 
     const span = document.createElement('span');
     span.textContent = item.str;
@@ -80,7 +144,17 @@ const renderCustomTextLayer = (textContent: any, container: HTMLElement, viewpor
 
     // Check for explicit font in PDF styles to respect TimesNewRoman or other specific fonts
     if (textContent.styles && item.fontName && textContent.styles[item.fontName]) {
-      span.style.fontFamily = textContent.styles[item.fontName].fontFamily;
+      const fontData = textContent.styles[item.fontName];
+      const fontFamily = fontData.fontFamily;
+      
+      span.style.fontFamily = fontFamily;
+
+      // --- AUTO DOWNLOAD FONT LOGIC ---
+      // Check if the font is available in the document.
+      // We check for "12px FontName". If check returns false, the font is likely missing.
+      if (fontFamily && !document.fonts.check(`12px "${fontFamily}"`)) {
+         tryAutoDownloadFont(fontFamily);
+      }
     } else {
       // Fallback
       span.style.fontFamily = "'Google Sans', 'Inter', sans-serif";
@@ -117,6 +191,7 @@ interface PdfPageProps {
   onPageClick: (page: number, x: number, y: number) => void;
   onDeleteAnnotation: (annotation: Annotation) => void;
   onAddInk: (ann: Annotation) => void;
+  onAddNote: (ann: Annotation) => void;
 }
 
 const PdfPage: React.FC<PdfPageProps> = ({ 
@@ -131,12 +206,14 @@ const PdfPage: React.FC<PdfPageProps> = ({
   inkOpacity,
   onPageClick,
   onDeleteAnnotation,
-  onAddInk
+  onAddInk,
+  onAddNote
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const pageContainerRef = useRef<HTMLDivElement>(null);
   const renderTaskRef = useRef<any>(null); // Ref to track current render task
+  const noteInputRef = useRef<HTMLTextAreaElement>(null);
   
   // States
   const [rendered, setRendered] = useState(false);
@@ -149,6 +226,23 @@ const PdfPage: React.FC<PdfPageProps> = ({
   // Ink State
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentPoints, setCurrentPoints] = useState<number[][]>([]);
+
+  // Draft Note State (for inline editor)
+  const [draftNote, setDraftNote] = useState<{x: number, y: number, text: string} | null>(null);
+
+  // Clear draft note if tool changes
+  useEffect(() => {
+    if (activeTool !== 'text') {
+      setDraftNote(null);
+    }
+  }, [activeTool]);
+
+  // Focus textarea when draft note opens
+  useEffect(() => {
+    if (draftNote && noteInputRef.current) {
+      noteInputRef.current.focus();
+    }
+  }, [draftNote]);
 
   // 1. Setup Intersection Observer
   useEffect(() => {
@@ -277,13 +371,30 @@ const PdfPage: React.FC<PdfPageProps> = ({
   const handleContainerClick = (e: React.MouseEvent) => {
     if (activeTool !== 'text' || !pageContainerRef.current) return;
     if ((e.target as HTMLElement).closest('.annotation-item')) return;
+    if ((e.target as HTMLElement).closest('.note-editor')) return;
 
     const rect = pageContainerRef.current.getBoundingClientRect();
     // Normalize coordinates to PDF scale=1
     const x = (e.clientX - rect.left) / scale;
     const y = (e.clientY - rect.top) / scale;
     
-    onPageClick(pageNumber, x, y);
+    // If Text tool is active, start a Draft Note instead of generic click
+    setDraftNote({ x, y, text: '' });
+  };
+
+  const handleSaveDraftNote = () => {
+    if (draftNote && draftNote.text.trim()) {
+      onAddNote({
+        id: `temp-note-${Date.now()}-${Math.random()}`,
+        page: pageNumber,
+        bbox: [draftNote.x, draftNote.y, 0, 0],
+        type: 'note',
+        text: draftNote.text,
+        color: '#fef9c3',
+        opacity: 1
+      });
+    }
+    setDraftNote(null);
   };
 
   // --- Ink Handling ---
@@ -375,6 +486,48 @@ const PdfPage: React.FC<PdfPageProps> = ({
         }}
       />
 
+      {/* Draft Note Editor (Visual Input) */}
+      {draftNote && (
+        <div 
+          className="note-editor absolute z-50 animate-in zoom-in duration-200"
+          style={{
+            left: draftNote.x * scale,
+            top: draftNote.y * scale,
+            maxWidth: '250px'
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="bg-yellow-100 text-gray-900 rounded-lg shadow-xl border border-yellow-300 p-2 flex flex-col gap-2 w-64">
+             <div className="flex items-center justify-between border-b border-yellow-200/50 pb-1 mb-1">
+               <span className="text-[10px] uppercase font-bold text-yellow-800 tracking-wider">Nova Nota</span>
+             </div>
+             <textarea 
+               ref={noteInputRef}
+               value={draftNote.text}
+               onChange={(e) => setDraftNote({ ...draftNote, text: e.target.value })}
+               placeholder="Digite sua anotação..."
+               className="bg-transparent w-full text-sm resize-none outline-none min-h-[80px] leading-relaxed placeholder:text-yellow-700/50"
+             />
+             <div className="flex items-center gap-2 justify-end pt-1">
+               <button 
+                  onClick={() => setDraftNote(null)}
+                  className="p-1.5 rounded-md hover:bg-yellow-200 text-yellow-800 transition-colors"
+                  title="Cancelar"
+               >
+                  <X size={16} />
+               </button>
+               <button 
+                  onClick={handleSaveDraftNote}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-yellow-400 hover:bg-yellow-500 text-yellow-950 rounded-md text-xs font-bold transition-colors shadow-sm"
+               >
+                  <Check size={14} />
+                  Salvar
+               </button>
+             </div>
+          </div>
+        </div>
+      )}
+
       {/* Annotations Layer */}
       {isVisible && (
         <div className="absolute inset-0 pointer-events-none">
@@ -394,7 +547,7 @@ const PdfPage: React.FC<PdfPageProps> = ({
                   className={activeTool === 'eraser' ? 'hover:opacity-50 cursor-pointer' : ''}
                   style={{ 
                     pointerEvents: activeTool === 'eraser' ? 'visibleStroke' : 'none',
-                    cursor: activeTool === 'eraser' ? 'pointer' : 'none'
+                    cursor: activeTool === 'eraser' ? 'url(https://cdn-icons-png.flaticon.com/32/2661/2661282.png), pointer' : 'none'
                   }}
                   onClick={(e) => {
                     if (activeTool === 'eraser' && ann.id) {
@@ -442,7 +595,7 @@ const PdfPage: React.FC<PdfPageProps> = ({
                     backgroundColor: ann.color || '#facc15',
                     opacity: ann.opacity ?? 0.4,
                     pointerEvents: activeTool === 'cursor' ? 'none' : 'auto',
-                    cursor: activeTool === 'eraser' ? 'pointer' : 'default'
+                    cursor: activeTool === 'eraser' ? 'url(https://cdn-icons-png.flaticon.com/32/2661/2661282.png), pointer' : 'default'
                   }}
                   onClick={(e) => {
                     if (activeTool === 'eraser' && ann.id) {
@@ -457,26 +610,34 @@ const PdfPage: React.FC<PdfPageProps> = ({
                 <div
                   key={ann.id || i}
                   id={`ann-${ann.id}`}
-                  className="annotation-item absolute z-20 group pointer-events-auto"
+                  className="annotation-item absolute z-20 group pointer-events-auto animate-in zoom-in duration-200"
                   style={{
                     left: x,
                     top: y,
-                    maxWidth: '200px'
+                    maxWidth: '200px',
+                    cursor: activeTool === 'eraser' ? 'url(https://cdn-icons-png.flaticon.com/32/2661/2661282.png), pointer' : 'auto'
+                  }}
+                  onClick={(e) => {
+                    if (activeTool === 'eraser' && ann.id) {
+                      e.stopPropagation();
+                      onDeleteAnnotation(ann);
+                    }
                   }}
                 >
                   <div 
-                    className="bg-yellow-100 text-gray-900 text-sm p-2 rounded shadow-md border border-yellow-300 relative hover:scale-105 transition-transform"
+                    className={`bg-yellow-100 text-gray-900 text-sm p-3 rounded-br-xl rounded-bl-sm rounded-tr-sm rounded-tl-sm shadow-md border border-yellow-300 relative hover:scale-105 transition-transform ${activeTool === 'eraser' ? 'hover:opacity-50' : ''}`}
                     style={{ backgroundColor: ann.color || '#fef9c3' }}
                   >
-                    <p className="whitespace-pre-wrap break-words font-medium leading-tight">{ann.text}</p>
+                    <p className="whitespace-pre-wrap break-words font-medium leading-relaxed">{ann.text}</p>
                     
-                    {ann.id && !ann.id.startsWith('temp') && (
+                    {ann.id && !ann.id.startsWith('temp') && activeTool !== 'eraser' && (
                       <button 
                         onClick={(e) => {
                           e.stopPropagation();
                           onDeleteAnnotation(ann);
                         }}
                         className="absolute -top-2 -right-2 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-sm pointer-events-auto cursor-pointer"
+                        title="Excluir Nota"
                       >
                         <X size={10} />
                       </button>
@@ -528,6 +689,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
   const [textColor, setTextColor] = useState("#000000");
   const [highlightColor, setHighlightColor] = useState("#facc15"); 
   const [highlightOpacity, setHighlightOpacity] = useState(0.4);
+  const [pageOffset, setPageOffset] = useState(1);
   
   // Ink Settings
   const [inkColor, setInkColor] = useState("#22c55e"); // Green by default
@@ -571,9 +733,9 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
     });
 
     return uniqueAnnotations
-      .map(a => `Página ${a.page}\n${a.text}`)
+      .map(a => `Página ${a.page + pageOffset - 1}\n${a.text}`)
       .join('\n\n');
-  }, [annotations]);
+  }, [annotations, pageOffset]);
 
   // Sidebar List Generation (Annotations Tab)
   const sidebarAnnotations = useMemo(() => {
@@ -619,7 +781,8 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
   };
 
   const handleDeleteAnnotation = (target: Annotation) => {
-    if (target.type === 'ink' || !target.text) {
+    // If it's a Note or Ink or doesn't have text, try deleting by ID first
+    if (target.type === 'ink' || target.type === 'note' || !target.text) {
          // Delete specific item (Ink or valid ID)
          if (target.id) {
             setAnnotations(prev => prev.filter(a => a.id !== target.id));
@@ -638,18 +801,28 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
 
     const init = async () => {
       try {
-        setLoading(true);
         let blob: Blob;
 
+        // Use existing blob if available (prevents error on auth refresh/logout if file is already loaded)
         if (fileBlob) {
           blob = fileBlob;
+        } else if (originalBlob) {
+          blob = originalBlob;
         } else if (accessToken) {
           blob = await downloadDriveFile(accessToken, fileId);
         } else {
+          // If we have no source at all (and no cached blob), we can't load.
           throw new Error("No file source provided");
         }
+        
+        // If reusing existing blob and doc is ready, skip
+        if (originalBlob && pdfDoc) {
+             return;
+        }
 
-        if (mounted) setOriginalBlob(blob);
+        setLoading(true);
+
+        if (mounted && !originalBlob) setOriginalBlob(blob);
 
         const arrayBuffer = await blob.arrayBuffer();
         const pdf = await getDocument({ data: arrayBuffer }).promise;
@@ -688,7 +861,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
 
     init();
     return () => { mounted = false; };
-  }, [accessToken, fileId, uid, fileBlob]);
+  }, [accessToken, fileId, uid, fileBlob]); // Dependencies dictate when to run. We use state refs inside to be smart.
 
   // Helper to manually trigger Fit Width
   const handleFitWidth = async () => {
@@ -710,7 +883,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
   useEffect(() => {
     const handleSelectionEnd = (e: Event) => {
       if (activeTool === 'text' || activeTool === 'ink' || activeTool === 'eraser') return;
-      if (e.target instanceof Element && e.target.closest('button, input, select, .ui-panel')) return;
+      if (e.target instanceof Element && e.target.closest('button, input, select, .ui-panel, textarea, .note-editor')) return;
 
       setTimeout(() => {
         const sel = window.getSelection();
@@ -808,24 +981,10 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
     saveAnnotationsList(newAnns);
   };
 
-  const createTextNote = async (page: number, x: number, y: number) => {
-    const text = window.prompt("Digite sua nota:");
-    if (!text || !text.trim()) return;
-
-    setActiveTool('cursor');
-
-    const newAnn: Annotation = {
-      id: `temp-note-${Date.now()}-${Math.random()}`,
-      page,
-      bbox: [x, y, 0, 0], // x, y passed here are already normalized
-      type: 'note',
-      text: text,
-      color: '#fef9c3',
-      opacity: 1
-    };
-
-    setAnnotations(prev => [...prev, newAnn]);
-    saveAnnotationsList([newAnn]);
+  const handleAddNote = async (ann: Annotation) => {
+    setAnnotations(prev => [...prev, ann]);
+    saveAnnotationsList([ann]);
+    setActiveTool('cursor'); // Reset tool after adding
   };
 
   const addInkAnnotation = async (ann: Annotation) => {
@@ -1108,7 +1267,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
                                     >
                                         <div className="flex items-center gap-2 mb-1">
                                             <span className={`w-2 h-2 rounded-full`} style={{ backgroundColor: ann.color || (ann.type === 'highlight' ? highlightColor : '#fef9c3') }} />
-                                            <span className="text-xs text-text-sec uppercase font-bold tracking-wider">Pág {ann.page}</span>
+                                            <span className="text-xs text-text-sec uppercase font-bold tracking-wider">Pág {ann.page + pageOffset - 1}</span>
                                             {ann.type === 'ink' && <span className="text-xs text-text-sec bg-surface px-1 rounded border border-border">Desenho</span>}
                                         </div>
                                         <p className="text-sm text-text line-clamp-2 leading-relaxed">
@@ -1162,11 +1321,62 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
                             </div>
                         ) : (
                             <div className="space-y-6 animate-in fade-in">
+                                {/* Page Numbering Settings */}
+                                <div className="space-y-3">
+                                    <h4 className="text-xs text-text-sec uppercase font-bold tracking-wider flex items-center gap-2">
+                                        <Hash size={14} /> Paginação
+                                    </h4>
+                                    <div className="flex justify-between items-center bg-bg p-2 rounded-lg border border-border">
+                                        <label className="text-sm text-text">Página Inicial</label>
+                                        <input 
+                                            type="number" 
+                                            min="1" 
+                                            value={pageOffset} 
+                                            onChange={(e) => setPageOffset(Math.max(1, parseInt(e.target.value) || 1))} 
+                                            className="bg-transparent border-b border-border w-16 text-right focus:outline-none focus:border-brand" 
+                                        />
+                                    </div>
+                                    <p className="text-xs text-text-sec">Ajusta a numeração exibida (ex: se o artigo começa na pág. 180).</p>
+                                </div>
+
+                                <div className="w-full h-px bg-border my-2"></div>
+
                                 {/* Color Settings */}
                                 <div className="space-y-3">
                                     <h4 className="text-xs text-text-sec uppercase font-bold tracking-wider flex items-center gap-2">
                                         <PaintBucket size={14} /> Leitura
                                     </h4>
+
+                                    {/* Theme Presets */}
+                                    <div className="grid grid-cols-3 gap-2 mb-2">
+                                      <button 
+                                        onClick={() => { setPageColor('#ffffff'); setTextColor('#000000'); }}
+                                        className="flex flex-col items-center gap-1 p-2 rounded-lg border border-border hover:border-brand bg-white text-black transition-all"
+                                        title="Tema Claro"
+                                      >
+                                        <div className="w-6 h-6 rounded-full border border-gray-200 flex items-center justify-center font-serif font-bold text-xs bg-white text-black">A</div>
+                                        <span className="text-[10px] font-medium text-gray-900">Claro</span>
+                                      </button>
+
+                                      <button 
+                                        onClick={() => { setPageColor('#0f172a'); setTextColor('#ffffff'); }}
+                                        className="flex flex-col items-center gap-1 p-2 rounded-lg border border-border hover:border-brand bg-[#0f172a] text-white transition-all"
+                                        title="Tema Escuro (Azulado)"
+                                      >
+                                        <div className="w-6 h-6 rounded-full border border-gray-700 flex items-center justify-center font-serif font-bold text-xs bg-[#0f172a] text-white">A</div>
+                                        <span className="text-[10px] font-medium text-gray-200">Escuro</span>
+                                      </button>
+
+                                      <button 
+                                        onClick={() => { setPageColor('#000000'); setTextColor('#ffffff'); }}
+                                        className="flex flex-col items-center gap-1 p-2 rounded-lg border border-border hover:border-brand bg-black text-white transition-all"
+                                        title="Tema OLED"
+                                      >
+                                        <div className="w-6 h-6 rounded-full border border-gray-800 flex items-center justify-center font-serif font-bold text-xs bg-black text-white">A</div>
+                                        <span className="text-[10px] font-medium text-gray-200">OLED</span>
+                                      </button>
+                                    </div>
+
                                     <div className="flex justify-between items-center bg-bg p-2 rounded-lg border border-border">
                                         <label className="text-sm text-text">Fundo</label>
                                         <input type="color" value={pageColor} onChange={(e) => setPageColor(e.target.value)} className="bg-transparent border-0 w-8 h-8 cursor-pointer" />
@@ -1366,7 +1576,8 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
                 inkColor={inkColor}
                 inkStrokeWidth={inkStrokeWidth}
                 inkOpacity={inkOpacity}
-                onPageClick={(page, x, y) => createTextNote(page, x, y)}
+                onPageClick={() => {}} // Legacy prop unused for new notes
+                onAddNote={handleAddNote}
                 onDeleteAnnotation={handleDeleteAnnotation}
                 onAddInk={addInkAnnotation}
               />
