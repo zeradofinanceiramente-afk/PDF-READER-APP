@@ -367,7 +367,16 @@ const PdfPage: React.FC<PdfPageProps> = ({
     return () => { 
       active = false; 
       if (renderTaskRef.current) {
-          renderTaskRef.current.cancel().catch(() => {});
+          // Fix for "Cannot read properties of undefined (reading 'catch')"
+          // PDF.js v5 cancel() might return void/undefined
+          try {
+              const cancelResult = renderTaskRef.current.cancel();
+              if (cancelResult && typeof cancelResult.catch === 'function') {
+                  cancelResult.catch(() => {});
+              }
+          } catch (e) {
+              // ignore synchronous errors
+          }
           renderTaskRef.current = null;
       }
     };
@@ -983,7 +992,8 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
 
      const pageEl = containerRef.current?.querySelector(`.pdf-page[data-page-number="${pageNumber}"]`);
      if (pageEl) {
-         pageEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+         // Fix: Use 'auto' instead of 'smooth' to prevent rendering intermediate pages during scroll
+         pageEl.scrollIntoView({ behavior: 'auto', block: 'start' });
          setCurrentPageNumber(pageNumber); // Optimistic update
      }
   }, [numPages]);
