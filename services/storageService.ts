@@ -1,26 +1,27 @@
-import { collection, addDoc, getDocs, serverTimestamp } from "firebase/firestore";
-import { db } from "../firebase";
 import { openDB } from "idb";
 import { Annotation, DriveFile } from "../types";
 
 // --- IndexedDB Setup ---
-const dbPromise = openDB("pwa-drive-annotator", 2, {
+const dbPromise = openDB("pwa-drive-annotator", 3, {
   upgrade(db, oldVersion, newVersion, transaction) {
-    if (!db.objectStoreNames.contains("pendingAnnotations")) {
-      db.createObjectStore("pendingAnnotations", { keyPath: "localId", autoIncrement: true });
+    // Store para anotações locais
+    if (!db.objectStoreNames.contains("annotations")) {
+      const store = db.createObjectStore("annotations", { keyPath: "id" });
+      store.createIndex("fileId", "fileId", { unique: false });
     }
-    // New store for Recent Files history
+    
+    // Remover store antiga se existir (limpeza)
+    if (db.objectStoreNames.contains("pendingAnnotations")) {
+      db.deleteObjectStore("pendingAnnotations");
+    }
+
+    // Store para Histórico de Arquivos Recentes
     if (!db.objectStoreNames.contains("recentFiles")) {
       const store = db.createObjectStore("recentFiles", { keyPath: "id" });
       store.createIndex("lastOpened", "lastOpened");
     }
   }
 });
-
-// --- Firestore Refs ---
-function annotationsRef(uid: string, fileId: string) {
-  return collection(db, `users/${uid}/driveFiles/${fileId}/annotations`);
-}
 
 // --- Recent Files Logic ---
 
@@ -38,94 +39,42 @@ export async function getRecentFiles(): Promise<(DriveFile & { lastOpened: Date 
   return files.sort((a, b) => b.lastOpened - a.lastOpened);
 }
 
-// --- Annotation Logic ---
+// --- Annotation Logic (Local Only) ---
 
-export async function saveAnnotation(uid: string, fileId: string, ann: Omit<Annotation, 'id'>) {
-  const annotationData = {
+export async function saveAnnotation(uid: string, fileId: string, ann: Annotation) {
+  // O UID é mantido na assinatura para compatibilidade, mas ignorado na lógica local.
+  // As anotações vivem no dispositivo.
+  const idb = await dbPromise;
+  
+  // Garante que a anotação tenha um ID final
+  const finalId = ann.id || `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  
+  const annotationToSave = {
     ...ann,
-    author: uid,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp()
+    id: finalId,
+    fileId: fileId,
+    updatedAt: new Date().toISOString()
   };
 
-  try {
-    if (!navigator.onLine) throw new Error("Offline");
-    // If guest, simulate failure to fall back to IDB logic immediately or let Firestore fail
-    if (uid === 'guest') throw new Error("Guest mode");
-    
-    // Try Firestore first
-    const docRef = await addDoc(annotationsRef(uid, fileId), annotationData);
-    return { ...annotationData, id: docRef.id, fromCache: false };
-
-  } catch (error) {
-    console.warn("Saving to offline storage (Offline or Guest):", error);
-    // Fallback to IDB
-    const idb = await dbPromise;
-    await idb.add("pendingAnnotations", { 
-      ...annotationData, 
-      uid, 
-      fileId, 
-      createdAt: new Date().toISOString() // Convert serverTimestamp to string for IDB
-    });
-    return { ...annotationData, fromCache: true };
-  }
+  await idb.put("annotations", annotationToSave);
+  return annotationToSave;
 }
 
 export async function loadAnnotations(uid: string, fileId: string): Promise<Annotation[]> {
-  let onlineAnns: Annotation[] = [];
-  
-  // 1. Try Load from Firestore
-  try {
-    // Optimization: Don't attempt Firestore if guest, avoiding permission errors
-    if (uid !== 'guest' && navigator.onLine) {
-      const snap = await getDocs(annotationsRef(uid, fileId));
-      onlineAnns = snap.docs.map(d => ({ id: d.id, ...d.data() } as Annotation));
-    }
-  } catch (e) {
-    console.warn("Could not load from Firestore (offline or guest):", e);
-    // Continue execution to load local annotations
-  }
-
-  // 2. Load pending from IDB for this file (optimistic UI)
-  try {
-    const idb = await dbPromise;
-    const allPending = await idb.getAll("pendingAnnotations");
-    const localAnns = allPending
-      .filter((a: any) => a.uid === uid && a.fileId === fileId)
-      .map((a: any) => ({ ...a, id: `local-${a.localId}` } as Annotation));
-
-    return [...onlineAnns, ...localAnns];
-  } catch (e) {
-    console.error("Error loading local annotations", e);
-    return onlineAnns;
-  }
+  const idb = await dbPromise;
+  // Busca todas as anotações deste arquivo específico no banco local
+  const allAnns = await idb.getAllFromIndex("annotations", "fileId", fileId);
+  return allAnns;
 }
 
-export async function syncPendingAnnotations() {
+export async function deleteAnnotation(id: string) {
   const idb = await dbPromise;
-  const pending = await idb.getAll("pendingAnnotations");
-  
-  if (pending.length === 0) return;
+  await idb.delete("annotations", id);
+}
 
-  console.log(`Syncing ${pending.length} annotations...`);
-
-  for (const item of pending) {
-    try {
-      const { localId, uid, fileId, ...data } = item;
-      
-      // Skip sync if guest
-      if (uid === 'guest') continue;
-
-      // Convert string date back to timestamp if needed or just save
-      await addDoc(annotationsRef(uid, fileId), {
-        ...data,
-        createdAt: serverTimestamp(), // Refresh timestamp on sync
-        updatedAt: serverTimestamp()
-      });
-      // Remove from IDB on success
-      await idb.delete("pendingAnnotations", localId);
-    } catch (e) {
-      console.error("Sync failed for item", item, e);
-    }
-  }
+// Função de sincronização removida pois não usamos mais Firestore.
+// Mantemos uma função vazia ou removemos a chamada no App.tsx.
+export async function syncPendingAnnotations() {
+  // No-op (Operação removida)
+  return;
 }

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist';
 import { PDFDocument, rgb } from 'pdf-lib';
 import { Annotation, DriveFile } from '../types';
-import { saveAnnotation, loadAnnotations } from '../services/storageService';
+import { saveAnnotation, loadAnnotations, deleteAnnotation } from '../services/storageService';
 import { downloadDriveFile, uploadFileToDrive, deleteDriveFile } from '../services/driveService';
 import { ArrowLeft, Highlighter, Loader2, X, Type, List, MousePointer2, Save, ScanLine, ZoomIn, ZoomOut, Menu, PaintBucket, Sliders, MoveHorizontal, Pen, Eraser, Copy, Download, FileText, Hash, Check, ChevronUp, ChevronDown } from 'lucide-react';
 
@@ -745,6 +745,10 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
   const [inkStrokeWidth, setInkStrokeWidth] = useState(20); // 20px by default
   const [inkOpacity, setInkOpacity] = useState(0.5); // 50% opacity by default
 
+  const isLocalFile = useMemo(() => {
+    return fileId.startsWith('local-') || !accessToken;
+  }, [fileId, accessToken]);
+
   // Update Page Title (Native Multi-Window Task Label)
   useEffect(() => {
     document.title = fileName;
@@ -829,20 +833,29 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
     window.URL.revokeObjectURL(url);
   };
 
-  const handleDeleteAnnotation = useCallback((target: Annotation) => {
+  const handleDeleteAnnotation = useCallback(async (target: Annotation) => {
     // If it's a Note or Ink or doesn't have text, try deleting by ID first
     if (target.type === 'ink' || target.type === 'note' || !target.text) {
          // Delete specific item (Ink or valid ID)
          if (target.id) {
+            await deleteAnnotation(target.id);
             setAnnotations(prev => prev.filter(a => a.id !== target.id));
          }
     } else {
          // Delete all highlights with same text on this page (removes the "ghost" fragments of a multi-line highlight)
+         const toDelete = annotations.filter(a => 
+             a.page === target.page && a.text === target.text && a.type === target.type
+         );
+         
+         for (const ann of toDelete) {
+             if (ann.id) await deleteAnnotation(ann.id);
+         }
+         
          setAnnotations(prev => prev.filter(a => 
              !(a.page === target.page && a.text === target.text && a.type === target.type)
          ));
     }
-  }, []);
+  }, [annotations]);
 
   // Load PDF
   useEffect(() => {
@@ -879,6 +892,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
         if (mounted) {
           setPdfDoc(pdf);
           setNumPages(pdf.numPages);
+          // Changed: Now loads only from local IndexedDB
           const existingAnns = await loadAnnotations(uid, fileId);
           setAnnotations(existingAnns);
 
@@ -1062,7 +1076,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
            position = 'top';
         }
 
-        const popupX = boundingRect.left - containerRect.left + container.scrollLeft + (boundingRect.width / 2);
+        const popupX = boundingRect.left - containerRect.left + container.scrollTop + (boundingRect.width / 2);
 
         const pageRect = pageElement.getBoundingClientRect();
         // NORMALIZE RECTS: Convert screen pixels to PDF Points (scale = 1)
@@ -1102,7 +1116,8 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
 
     const newAnns: Annotation[] = selection.relativeRects.map(rect => {
       return {
-        id: `temp-hl-${Date.now()}-${Math.random()}`,
+        // Ensure ID is generated for local storage
+        id: `temp-hl-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
         page: selection.page,
         bbox: [
           rect.x, 
@@ -1140,26 +1155,28 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
     setIsSaving(true);
     try {
       for (const ann of anns) {
+         // Now saves to IndexedDB locally
          await saveAnnotation(uid, fileId, ann);
       }
     } catch (err) {
-      console.error("Failed to save annotation", err);
+      console.error("Failed to save annotation locally", err);
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleSaveToDrive = async () => {
-    if (!accessToken || !originalBlob) {
+  const handleSave = async () => {
+    if (!originalBlob) {
       alert("Erro: Arquivo ou sessão inválida.");
       return;
     }
 
-    const confirmSave = window.confirm(
-      "Isso criará uma versão anotada e SUBSTITUIRÁ o arquivo original. As anotações ficarão permanentes no PDF. Deseja continuar?"
-    );
-
-    if (!confirmSave) return;
+    if (!isLocalFile) {
+        const confirmSave = window.confirm(
+          "Isso criará uma versão anotada e SUBSTITUIRÁ o arquivo original no Drive. Deseja continuar?"
+        );
+        if (!confirmSave) return;
+    }
 
     setIsExporting(true);
 
@@ -1231,12 +1248,27 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
 
       const pdfBytes = await pdfDoc.save();
       const newPdfBlob = new Blob([pdfBytes as any], { type: 'application/pdf' });
-      const newFileName = fileName; 
-      await uploadFileToDrive(accessToken, newPdfBlob, newFileName, fileParents);
-      await deleteDriveFile(accessToken, fileId);
 
-      alert(`Sucesso! O arquivo original foi substituído pela versão anotada.`);
-      onBack();
+      if (isLocalFile) {
+        // --- LOCAL FILE SAVING: DOWNLOAD ---
+        const url = window.URL.createObjectURL(newPdfBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `Anotado - ${fileName}`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        alert("Arquivo baixado com sucesso!");
+      } else {
+        // --- DRIVE FILE SAVING: UPLOAD ---
+        if (!accessToken) throw new Error("Sem permissão de acesso ao Drive");
+        const newFileName = fileName; 
+        await uploadFileToDrive(accessToken, newPdfBlob, newFileName, fileParents);
+        await deleteDriveFile(accessToken, fileId);
+        alert(`Sucesso! O arquivo original foi substituído pela versão anotada.`);
+        onBack();
+      }
 
     } catch (err: any) {
       console.error("Export error:", err);
@@ -1247,7 +1279,7 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
              return;
          }
       }
-      alert("Falha ao salvar no Drive: " + err.message);
+      alert("Falha ao salvar: " + err.message);
     } finally {
       setIsExporting(false);
     }
@@ -1342,14 +1374,14 @@ export const PdfViewer: React.FC<Props> = ({ accessToken, fileId, fileName, file
         <div className="flex items-center gap-2">
             {isSaving && <Loader2 size={16} className="animate-spin text-brand" />}
             
-            {/* Save Button Moved to Header */}
+            {/* Save Button */}
             <button 
-                onClick={handleSaveToDrive}
-                className="flex items-center gap-2 px-3 py-1.5 bg-brand text-bg rounded-full text-sm font-medium hover:brightness-110 transition-all shadow-lg shadow-brand/20"
-                title="Salvar alterações no Drive"
+                onClick={handleSave}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium hover:brightness-110 transition-all shadow-lg ${isLocalFile ? 'bg-surface border border-border text-text hover:bg-white/5' : 'bg-brand text-bg shadow-brand/20'}`}
+                title={isLocalFile ? "Baixar PDF com anotações" : "Salvar alterações no Drive"}
             >
-                <Save size={16} />
-                <span className="hidden sm:inline">Salvar</span>
+                {isLocalFile ? <Download size={16} /> : <Save size={16} />}
+                <span className="hidden sm:inline">{isLocalFile ? "Baixar" : "Salvar"}</span>
             </button>
 
             <button 

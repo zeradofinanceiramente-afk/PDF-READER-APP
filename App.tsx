@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { auth } from './firebase';
 import { User, onAuthStateChanged } from 'firebase/auth';
 import { signInWithGoogleDrive, logout } from './services/authService';
-import { syncPendingAnnotations, addRecentFile } from './services/storageService';
+import { addRecentFile } from './services/storageService';
 import { DriveBrowser } from './components/DriveBrowser';
 import { PdfViewer } from './components/PdfViewer';
 import { Sidebar } from './components/Sidebar';
@@ -96,13 +96,15 @@ export default function App() {
     return () => unsubscribe();
   }, [isPopup]);
 
-  // Monitor Online Status
+  // Monitor Online Status (Sync logic removed as requested)
+  /* 
   useEffect(() => {
     const handleOnline = () => syncPendingAnnotations();
     window.addEventListener('online', handleOnline);
     if (navigator.onLine) syncPendingAnnotations();
     return () => window.removeEventListener('online', handleOnline);
   }, []);
+  */
 
   const handleLogin = async () => {
     setAuthError(null);
