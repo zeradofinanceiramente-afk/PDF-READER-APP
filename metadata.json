@@ -1,5 +1,5 @@
 {
-  "name": "PDF READER",
+  "name": "Leitor de PDF",
   "description": "Um PWA serverless para visualizar PDFs do Google Drive, fazer anotações e sincronizar com Firestore.",
   "requestFramePermissions": []
 }

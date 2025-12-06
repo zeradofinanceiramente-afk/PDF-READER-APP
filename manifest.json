@@ -1,8 +1,8 @@
 {
   "id": "/",
   "scope": "/",
-  "name": "Anotador de PDF Drive",
-  "short_name": "PDF Anotador",
+  "name": "Leitor de PDF",
+  "short_name": "Leitor de PDF",
   "description": "Um PWA serverless para visualizar PDFs do Google Drive, fazer anotações e sincronizar com Firestore.",
   "lang": "pt-BR",
   "categories": ["productivity", "utilities", "education"],
